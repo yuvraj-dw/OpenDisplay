@@ -31,6 +31,8 @@ env/
 *.log
 tablet_screen.png
 docs/
+release_staging/
+*.zip
 
 # Third-party reverse engineering binaries
 SuperDisplay*
