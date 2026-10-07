@@ -456,7 +456,7 @@ class OpenDisplayServer:
             if frame is not None:
                 now = time.perf_counter()
                 # Fast 16x downsampled grid check (0.03ms): don't re-encode identical static screens
-                sub = frame[::16, ::16]
+                sub = frame[::16, ::16].copy()
                 if last_sub is not None and (now - last_encode_time < 0.25) and np.array_equal(sub, last_sub):
                     dt = time.perf_counter() - t0
                     sleep_time = interval - dt
@@ -515,7 +515,7 @@ class OpenDisplayServer:
                 try:
                     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-                    sock.setblocking(False)
+                    sock.settimeout(3.0)
                 except Exception:
                     pass
 
@@ -549,8 +549,12 @@ class OpenDisplayServer:
                                     break
                                 if len(raw) >= 6:
                                     payload_len = raw[1] & 0x7F
-                                    mask = raw[2:6]
-                                    data = raw[6:6 + payload_len]
+                                    offset = 2
+                                    if payload_len == 126 and len(raw) >= 8:
+                                        payload_len = struct.unpack("!H", raw[2:4])[0]
+                                        offset = 4
+                                    mask = raw[offset:offset + 4]
+                                    data = raw[offset + 4:offset + 4 + payload_len]
                                     msg = bytes(b ^ mask[i % 4] for i, b in enumerate(data)).decode('utf-8', errors='ignore')
                                     if msg.startswith('m:'):
                                         parts = msg.split(':')
