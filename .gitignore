@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build tools / Portable JDK
+build_tools/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Android Gradle build artifacts
+android/.gradle/
+android/local.properties
+android/build/
+android/app/build/
+.gradle/
+
+# IDE / Editor configs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment & Temp
+.env
+venv/
+env/
+*.log
+tablet_screen.png
+
+# Third-party reverse engineering binaries
+SuperDisplay*
+extracted_win/
+app_apk/
+.ruff_cache/
+app_win/superdisplay*
+app_win/Mirror*
+app_win/updater.exe
+app_win/crashpad*
+app_win/driver_installer.exe
+app_win/query.exe
+app_win/collectlog.bat
+app_win/EULA.rtf
+app_win/NOTICE*
+app_win/Sentry*
+app_win/sentry*
+app_win/System*
+app_win/Newtonsoft*
+app_win/Wintab32*
+app_win/xaudio2*
