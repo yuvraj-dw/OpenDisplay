@@ -24,12 +24,14 @@ public class MainActivity extends Activity {
         enableFullscreenImmersive();
 
         webView = new WebView(this);
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
         webView.setWebViewClient(new WebViewClient() {
             @Override

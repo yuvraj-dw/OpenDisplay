@@ -73,11 +73,15 @@ $compiledClasses = Get-ChildItem "$classesDir\com\display\usbclient\*.class" | F
 
 # Compile Android resources and link APK with AAPT2
 $manifestXml = Join-Path $androidSrc "AndroidManifest.xml"
+$compiledRes = Join-Path $toolsDir "compiled_res.zip"
+Remove-Item $compiledRes -Force -ErrorAction SilentlyContinue
+& $aaptExe compile --dir "$androidSrc\res" -o $compiledRes
+
 $compiledApk = Join-Path $outDir "OpenDisplay_unaligned.apk"
 $finalApk = Join-Path $rootDir "OpenDisplay.apk"
 Remove-Item $compiledApk, $finalApk -Force -ErrorAction SilentlyContinue
 
-& $aaptExe link -I $androidJar --min-sdk-version 26 --target-sdk-version 30 --manifest $manifestXml -o $compiledApk
+& $aaptExe link -I $androidJar -R $compiledRes --min-sdk-version 26 --target-sdk-version 30 --manifest $manifestXml -o $compiledApk --auto-add-overlay
 
 # Add classes.dex into APK
 & "C:\Program Files\7-Zip\7z.exe" a -tzip $compiledApk (Join-Path $dexDir "classes.dex") | Out-Null

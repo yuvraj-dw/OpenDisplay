@@ -9,6 +9,11 @@ import atexit
 import signal
 import ctypes
 import webbrowser
+import base64
+import hashlib
+import struct
+import select
+import numpy as np
 from ctypes import wintypes
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import win32api
@@ -191,7 +196,7 @@ HTML_VIEWER = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <img id="canvas" src="/stream" alt="Extended Display Stream">
+    <canvas id="canvas" width="1280" height="800"></canvas>
 
     <script>
         if ('wakeLock' in navigator) {
@@ -199,13 +204,48 @@ HTML_VIEWER = """<!DOCTYPE html>
         }
 
         const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+        let ws = null;
+        let busy = false;
+
+        function connect() {
+            const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+            ws = new WebSocket(proto + location.host + '/ws');
+            ws.binaryType = 'arraybuffer';
+
+            ws.onmessage = function(event) {
+                // Drop in-flight frame if tablet GPU is still rendering previous (Zero Lag/Bufferbloat)
+                if (busy) return;
+                busy = true;
+
+                createImageBitmap(new Blob([event.data])).then(function(bmp) {
+                    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+                    bmp.close(); // Immediately release hardware GPU texture memory
+                    busy = false;
+                }).catch(function() {
+                    busy = false;
+                });
+            };
+
+            ws.onclose = function() {
+                setTimeout(connect, 1000);
+            };
+
+            ws.onerror = function() {
+                try { ws.close(); } catch(e) {}
+            };
+        }
+
+        connect();
+
         function sendMouse(action, e) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
             const rect = canvas.getBoundingClientRect();
             const touch = e.touches ? e.touches[0] : (e.changedTouches ? e.changedTouches[0] : e);
             if (!touch && action !== 'up') return;
             const x = touch ? Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)) : 0;
             const y = touch ? Math.max(0, Math.min(1, (touch.clientY - rect.top) / rect.height)) : 0;
-            fetch('/mouse?action=' + action + '&x=' + x.toFixed(4) + '&y=' + y.toFixed(4), { method: 'POST' }).catch(function(){});
+            ws.send('m:' + action + ':' + x.toFixed(4) + ':' + y.toFixed(4));
         }
 
         canvas.addEventListener('touchstart', function(e) { e.preventDefault(); sendMouse('down', e); }, {passive: false});
@@ -350,9 +390,10 @@ class OpenDisplayServer:
         self.display_idx = display_idx
         self.fps = fps
         self.capture = DxgiScreenCapture(backend="auto")
-        self.encoder = HardwareEncoder(codec="jpeg", fps=fps, quality=80)
+        self.encoder = HardwareEncoder(codec="jpeg", fps=fps, quality=65)
         self.latest_frame_jpeg = None
-        self.lock = threading.Lock()
+        self.frame_condition = threading.Condition()
+        self.frame_id = 0
         self.is_running = True
         self.adb = self._find_adb()
         self.tray = None
@@ -392,6 +433,8 @@ class OpenDisplayServer:
 
     def stop(self):
         self.is_running = False
+        with self.frame_condition:
+            self.frame_condition.notify_all()
         if self.tray:
             self.tray.destroy()
         disable_virtual_display()
@@ -404,13 +447,31 @@ class OpenDisplayServer:
 
     def capture_loop(self):
         interval = 1.0 / self.fps
+        last_sub = None
+        last_encode_time = 0
+
         while self.is_running:
             t0 = time.perf_counter()
             frame = self.capture.capture_frame(display_idx=self.display_idx)
             if frame is not None:
-                jpeg_bytes = self.encoder.encode_image(frame)
-                with self.lock:
+                now = time.perf_counter()
+                # Fast 16x downsampled grid check (0.03ms): don't re-encode identical static screens
+                sub = frame[::16, ::16]
+                if last_sub is not None and (now - last_encode_time < 0.25) and np.array_equal(sub, last_sub):
+                    dt = time.perf_counter() - t0
+                    sleep_time = interval - dt
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                    continue
+
+                last_sub = sub
+                last_encode_time = now
+                jpeg_bytes = self.encoder.encode_image(frame, format="jpeg", quality=65)
+
+                with self.frame_condition:
                     self.latest_frame_jpeg = jpeg_bytes
+                    self.frame_id += 1
+                    self.frame_condition.notify_all()
 
             dt = time.perf_counter() - t0
             sleep_time = interval - dt
@@ -435,6 +496,90 @@ class OpenDisplayServer:
             def log_message(self, format, *args):
                 pass
 
+            def handle_websocket(self):
+                key = self.headers.get("Sec-WebSocket-Key")
+                if not key:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+
+                magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+                accept = base64.b64encode(hashlib.sha1((key + magic).encode()).digest()).decode()
+                self.send_response(101)
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept)
+                self.end_headers()
+
+                sock = self.connection
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+                    sock.setblocking(False)
+                except Exception:
+                    pass
+
+                last_sent_id = 0
+                disp_info = server_instance.capture.list_displays()
+                idx = server_instance.display_idx
+                d = disp_info[idx] if idx < len(disp_info) else disp_info[0]
+                left = d.get('left', 0)
+                top = d.get('top', 0)
+                w = d.get('width', 1280)
+                h = d.get('height', 800)
+
+                def send_ws_binary(payload):
+                    length = len(payload)
+                    if length < 126:
+                        header = bytes([0x82, length])
+                    elif length < 65536:
+                        header = struct.pack("!BBH", 0x82, 126, length)
+                    else:
+                        header = struct.pack("!BBQ", 0x82, 127, length)
+                    sock.sendall(header + payload)
+
+                try:
+                    while server_instance.is_running:
+                        # 1. Read client mouse messages
+                        try:
+                            rlist, _, _ = select.select([sock], [], [], 0)
+                            if rlist:
+                                raw = sock.recv(2048)
+                                if not raw:
+                                    break
+                                if len(raw) >= 6:
+                                    payload_len = raw[1] & 0x7F
+                                    mask = raw[2:6]
+                                    data = raw[6:6 + payload_len]
+                                    msg = bytes(b ^ mask[i % 4] for i, b in enumerate(data)).decode('utf-8', errors='ignore')
+                                    if msg.startswith('m:'):
+                                        parts = msg.split(':')
+                                        if len(parts) == 4:
+                                            action, nx, ny = parts[1], float(parts[2]), float(parts[3])
+                                            tx = int(left + nx * w)
+                                            ty = int(top + ny * h)
+                                            ctypes.windll.user32.SetCursorPos(tx, ty)
+                                            if action == 'down':
+                                                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                                            elif action == 'up':
+                                                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                        except Exception:
+                            pass
+
+                        # 2. Wait for next frame without busy-waiting
+                        frame_data = None
+                        with server_instance.frame_condition:
+                            if server_instance.frame_id == last_sent_id:
+                                server_instance.frame_condition.wait(timeout=0.03)
+                            if server_instance.frame_id != last_sent_id:
+                                frame_data = server_instance.latest_frame_jpeg
+                                last_sent_id = server_instance.frame_id
+
+                        if frame_data:
+                            send_ws_binary(frame_data)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+
             def do_GET(self):
                 if self.path == "/" or self.path == "/index.html":
                     self.send_response(200)
@@ -442,6 +587,9 @@ class OpenDisplayServer:
                     self.send_header("Cache-Control", "no-cache, no-store")
                     self.end_headers()
                     self.wfile.write(HTML_VIEWER.encode("utf-8"))
+
+                elif self.path == "/ws":
+                    self.handle_websocket()
 
                 elif self.path == "/stream":
                     self.send_response(200)
@@ -451,9 +599,21 @@ class OpenDisplayServer:
                     self.end_headers()
 
                     try:
+                        try:
+                            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+                        except Exception:
+                            pass
+
+                        last_id = 0
                         while server_instance.is_running:
-                            with server_instance.lock:
-                                frame_data = server_instance.latest_frame_jpeg
+                            frame_data = None
+                            with server_instance.frame_condition:
+                                if server_instance.frame_id == last_id:
+                                    server_instance.frame_condition.wait(timeout=0.04)
+                                if server_instance.frame_id != last_id:
+                                    frame_data = server_instance.latest_frame_jpeg
+                                    last_id = server_instance.frame_id
 
                             if frame_data is not None:
                                 self.wfile.write(b"--frame\r\n")
@@ -461,8 +621,7 @@ class OpenDisplayServer:
                                 self.wfile.write(f"Content-Length: {len(frame_data)}\r\n\r\n".encode("ascii"))
                                 self.wfile.write(frame_data)
                                 self.wfile.write(b"\r\n")
-                            time.sleep(1.0 / server_instance.fps)
-                    except (BrokenPipeError, ConnectionResetError):
+                    except (BrokenPipeError, ConnectionResetError, OSError):
                         pass
                 else:
                     self.send_response(404)
