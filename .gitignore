@@ -30,6 +30,7 @@ venv/
 env/
 *.log
 tablet_screen.png
+docs/
 
 # Third-party reverse engineering binaries
 SuperDisplay*
