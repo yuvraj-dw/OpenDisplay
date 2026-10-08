@@ -212,6 +212,10 @@ class HardwareEncoder:
 
         cmd.extend(['-f', 'h264', '-'])
 
+        flags = 0
+        if os.name == 'nt':
+            flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+
         try:
             self._proc = subprocess.Popen(
                 cmd,
@@ -219,6 +223,7 @@ class HardwareEncoder:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 bufsize=0,
+                creationflags=flags,
             )
             self._stop_event.clear()
             self._reader_thread = threading.Thread(

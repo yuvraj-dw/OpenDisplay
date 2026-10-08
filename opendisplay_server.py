@@ -85,7 +85,7 @@ def _run_devcon(action):
             return res.returncode == 0
         else:
             ps_cmd = f"Start-Process '{devcon}' -ArgumentList '{action} Root\\MttVDD' -Verb RunAs -WindowStyle Hidden -Wait"
-            subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, timeout=5)
+            subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, creationflags=0x08000000, timeout=5)
             return True
     except Exception as e:
         print(f"[OpenDisplay] Devcon {action} error: {e}")

@@ -66,7 +66,7 @@ if exist "dist\OpenDisplay\OpenDisplay.exe" (
 ) else if exist "OpenDisplay.exe" (
     start "" "OpenDisplay.exe"
 ) else (
-    start "" python opendisplay_server.py
+    start "" pythonw opendisplay_server.py
 )
 echo [Success] OpenDisplay is running silently in the Windows System Tray!
 timeout /t 2 >nul
