@@ -5,8 +5,14 @@ import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.Locale
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * Socket listener for USB extended display streaming over ADB forwarded localhost TCP.
@@ -40,7 +46,14 @@ class StreamReceiver(
     var isRunning: Boolean = true
         private set
 
+    private val outputLock = Any()
     private var activeSocket: Socket? = null
+    private var activeOutputStream: OutputStream? = null
+    private val sendExecutor = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue<Runnable>(64),
+        ThreadPoolExecutor.DiscardOldestPolicy()
+    )
 
     override fun run() {
         Log.i(TAG, "Starting StreamReceiver worker thread connecting to $host:$port")
@@ -54,7 +67,10 @@ class StreamReceiver(
                     receiveBufferSize = 512 * 1024
                     connect(InetSocketAddress(host, port), 3000)
                 }
-                activeSocket = socket
+                synchronized(outputLock) {
+                    activeSocket = socket
+                    activeOutputStream = socket.getOutputStream()
+                }
 
                 Log.i(TAG, "Successfully connected to streamer host at $host:$port")
                 listener?.onConnected()
@@ -91,15 +107,37 @@ class StreamReceiver(
                     }
                 }
             } finally {
-                try {
-                    socket?.close()
-                } catch (ignored: Exception) {}
-                if (activeSocket == socket) {
-                    activeSocket = null
+                synchronized(outputLock) {
+                    activeOutputStream = null
+                    try {
+                        socket?.close()
+                    } catch (ignored: Exception) {}
+                    if (activeSocket == socket) {
+                        activeSocket = null
+                    }
                 }
             }
         }
         Log.i(TAG, "StreamReceiver thread terminated cleanly")
+    }
+
+    fun sendTouch(action: String, normX: Float, normY: Float) {
+        if (!isRunning) return
+        val message = "m:$action:${String.format(Locale.US, "%.4f:%.4f", normX, normY)}\n"
+        try {
+            sendExecutor.execute {
+                synchronized(outputLock) {
+                    activeOutputStream?.let { os ->
+                        try {
+                            os.write(message.toByteArray(Charsets.UTF_8))
+                            os.flush()
+                        } catch (e: IOException) {
+                            Log.w(TAG, "Failed sending touch message: ${e.message}")
+                        }
+                    }
+                }
+            }
+        } catch (ignored: RejectedExecutionException) {}
     }
 
     private fun handleConfig(payload: ByteArray) {
@@ -130,8 +168,15 @@ class StreamReceiver(
      */
     fun stopReceiver() {
         isRunning = false
+        synchronized(outputLock) {
+            activeOutputStream = null
+            try {
+                activeSocket?.close()
+            } catch (ignored: Exception) {}
+            activeSocket = null
+        }
         try {
-            activeSocket?.close()
+            sendExecutor.shutdownNow()
         } catch (ignored: Exception) {}
         interrupt()
     }

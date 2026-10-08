@@ -5,9 +5,15 @@ import org.json.JSONObject;
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class StreamReceiver extends Thread {
     public interface Listener {
@@ -30,7 +36,14 @@ public class StreamReceiver extends Thread {
     private final Listener listener;
 
     private volatile boolean isRunning = true;
+    private final Object outputLock = new Object();
     private Socket activeSocket;
+    private OutputStream activeOutputStream;
+    private final ThreadPoolExecutor sendExecutor = new ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS,
+        new LinkedBlockingQueue<Runnable>(64),
+        new ThreadPoolExecutor.DiscardOldestPolicy()
+    );
 
     public StreamReceiver(H264Decoder decoder, String host, int port, long reconnectDelayMs, Listener listener) {
         super("StreamReceiverThread");
@@ -57,7 +70,11 @@ public class StreamReceiver extends Thread {
                 socket.setKeepAlive(true);
                 socket.setReceiveBufferSize(512 * 1024);
                 socket.connect(new InetSocketAddress(host, port), 3000);
-                activeSocket = socket;
+
+                synchronized (outputLock) {
+                    activeSocket = socket;
+                    activeOutputStream = socket.getOutputStream();
+                }
 
                 Log.i(TAG, "Connected to streamer host at " + host + ":" + port);
                 if (listener != null) listener.onConnected();
@@ -100,15 +117,41 @@ public class StreamReceiver extends Thread {
                     }
                 }
             } finally {
-                if (socket != null) {
-                    try { socket.close(); } catch (Exception ignored) {}
-                }
-                if (activeSocket == socket) {
-                    activeSocket = null;
+                synchronized (outputLock) {
+                    activeOutputStream = null;
+                    if (socket != null) {
+                        try { socket.close(); } catch (Exception ignored) {}
+                    }
+                    if (activeSocket == socket) {
+                        activeSocket = null;
+                    }
                 }
             }
         }
         Log.i(TAG, "StreamReceiver thread terminated cleanly");
+    }
+
+    public void sendTouch(String action, float normX, float normY) {
+        if (!isRunning) return;
+        final String message = "m:" + action + ":" + String.format(Locale.US, "%.4f:%.4f", normX, normY) + "\n";
+        try {
+            sendExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    synchronized (outputLock) {
+                        if (activeOutputStream != null) {
+                            try {
+                                activeOutputStream.write(message.getBytes(StandardCharsets.UTF_8));
+                                activeOutputStream.flush();
+                            } catch (IOException e) {
+                                Log.w(TAG, "Failed sending touch message: " + e.getMessage());
+                            }
+                        }
+                    }
+                }
+            });
+        } catch (RejectedExecutionException ignored) {
+        }
     }
 
     private void handleConfig(byte[] payload) {
@@ -148,9 +191,16 @@ public class StreamReceiver extends Thread {
 
     public void stopReceiver() {
         isRunning = false;
-        if (activeSocket != null) {
-            try { activeSocket.close(); } catch (Exception ignored) {}
+        synchronized (outputLock) {
+            activeOutputStream = null;
+            if (activeSocket != null) {
+                try { activeSocket.close(); } catch (Exception ignored) {}
+            }
+            activeSocket = null;
         }
+        try {
+            sendExecutor.shutdownNow();
+        } catch (Exception ignored) {}
         interrupt();
     }
 }

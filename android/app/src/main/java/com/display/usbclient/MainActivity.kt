@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -44,6 +45,31 @@ class MainActivity : Activity(), SurfaceHolder.Callback, StreamReceiver.Listener
 
         surfaceView = SurfaceView(this).apply {
             holder.addCallback(this@MainActivity)
+            setOnTouchListener { view, event ->
+                val w = view.width
+                val h = view.height
+                if (w <= 0 || h <= 0) return@setOnTouchListener true
+
+                val normX = (event.x / w.toFloat()).coerceIn(0.0f, 1.0f)
+                val normY = (event.y / h.toFloat()).coerceIn(0.0f, 1.0f)
+
+                val activeReceiver = receiver
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        activeReceiver?.sendTouch("down", normX, normY)
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        activeReceiver?.sendTouch("move", normX, normY)
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        activeReceiver?.sendTouch("up", normX, normY)
+                        true
+                    }
+                    else -> false
+                }
+            }
         }
         setContentView(surfaceView)
     }

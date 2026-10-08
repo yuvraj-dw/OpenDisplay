@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -82,6 +83,43 @@ public class MainActivity extends Activity {
             public void surfaceDestroyed(SurfaceHolder holder) {
                 Log.i(TAG, "Surface destroyed, releasing pipeline");
                 stopPipeline();
+            }
+        });
+
+        surfaceView.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, MotionEvent event) {
+                int width = view.getWidth();
+                int height = view.getHeight();
+                if (width <= 0 || height <= 0) {
+                    return true;
+                }
+
+                float normX = Math.max(0.0f, Math.min(1.0f, event.getX() / (float) width));
+                float normY = Math.max(0.0f, Math.min(1.0f, event.getY() / (float) height));
+
+                StreamReceiver currentReceiver = receiver;
+                int action = event.getActionMasked();
+                switch (action) {
+                    case MotionEvent.ACTION_DOWN:
+                        if (currentReceiver != null) {
+                            currentReceiver.sendTouch("down", normX, normY);
+                        }
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        if (currentReceiver != null) {
+                            currentReceiver.sendTouch("move", normX, normY);
+                        }
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if (currentReceiver != null) {
+                            currentReceiver.sendTouch("up", normX, normY);
+                        }
+                        return true;
+                    default:
+                        return false;
+                }
             }
         });
 
