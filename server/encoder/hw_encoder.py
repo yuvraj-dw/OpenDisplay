@@ -1,5 +1,6 @@
 import logging
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -8,6 +9,51 @@ import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_NVENC_AVAILABLE: bool | None = None
+
+
+def extract_nal_units(data: bytes) -> list[bytes]:
+    """Extract individual complete NAL units (with start codes) from Annex B byte stream."""
+    if not data:
+        return []
+
+    pattern = re.compile(b'(?:\x00\x00\x00\x01|\x00\x00\x01)')
+    matches = list(pattern.finditer(data))
+    if not matches:
+        return [data]
+
+    nals = []
+    if matches[0].start() > 0:
+        nals.append(data[:matches[0].start()])
+    for i in range(len(matches)):
+        start = matches[i].start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(data)
+        nal = data[start:end]
+        if nal:
+            nals.append(nal)
+    return nals
+
+
+def _is_nvenc_available(ffmpeg_path: str | None) -> bool:
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is not None:
+        return _NVENC_AVAILABLE
+    if not ffmpeg_path:
+        _NVENC_AVAILABLE = False
+        return False
+    try:
+        res = subprocess.run(
+            [ffmpeg_path, '-nostdin', '-f', 'lavfi', '-i', 'nullsrc=s=640x480', '-frames:v', '1', '-c:v', 'h264_nvenc', '-f', 'null', '-'],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=2.0,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        )
+        _NVENC_AVAILABLE = (res.returncode == 0)
+    except Exception:
+        _NVENC_AVAILABLE = False
+    return _NVENC_AVAILABLE
 
 
 def _find_ffmpeg() -> str | None:
@@ -34,7 +80,7 @@ class HardwareEncoder:
         width: int | None = None,
         height: int | None = None,
         fps: int = 60,
-        bitrate: str = '20M',
+        bitrate: str = '6M',
         quality: int = 80,
         low_latency: bool = True,
     ):
@@ -52,6 +98,7 @@ class HardwareEncoder:
         self._out_queue: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
         self._ffmpeg_path = _find_ffmpeg()
+        self._first_frame = True
 
         if self.codec not in ('jpeg', 'jpg', 'dummy'):
             if self.width and self.height:
@@ -72,8 +119,10 @@ class HardwareEncoder:
             target_codec = 'h264_mf'
         elif self.codec in ('qsv', 'h264_qsv'):
             target_codec = 'h264_qsv'
-        elif self.codec in ('x264', 'libx264', 'h264', 'auto'):
+        elif self.codec in ('x264', 'libx264'):
             target_codec = 'libx264'
+        elif self.codec in ('auto', 'h264'):
+            target_codec = 'h264_nvenc' if _is_nvenc_available(self._ffmpeg_path) else 'libx264'
 
         cmd = [
             self._ffmpeg_path,
@@ -103,11 +152,11 @@ class HardwareEncoder:
                 '-bf',
                 '0',
                 '-b:v',
-                self.bitrate,
+                self.bitrate or '6M',
                 '-maxrate',
-                self.bitrate,
+                self.bitrate or '6M',
                 '-bufsize',
-                '2M',
+                '1M',
                 '-g',
                 str(self.fps),
                 '-x264-params',
@@ -125,8 +174,18 @@ class HardwareEncoder:
                 '1',
                 '-delay',
                 '0',
+                '-bf',
+                '0',
                 '-b:v',
-                self.bitrate,
+                self.bitrate or '6M',
+                '-maxrate',
+                self.bitrate or '6M',
+                '-bufsize',
+                '1M',
+                '-g',
+                str(self.fps),
+                '-forced-idr',
+                '1',
                 '-flush_packets',
                 '1',
             ])
@@ -135,7 +194,16 @@ class HardwareEncoder:
                 '-usage',
                 'lowlatency',
                 '-b:v',
-                self.bitrate,
+                self.bitrate or '6M',
+                '-flush_packets',
+                '1',
+            ])
+        elif target_codec == 'h264_qsv':
+            cmd.extend([
+                '-preset',
+                'veryfast',
+                '-b:v',
+                self.bitrate or '6M',
                 '-flush_packets',
                 '1',
             ])
@@ -159,18 +227,23 @@ class HardwareEncoder:
             self.active_codec = target_codec
             self.width = width
             self.height = height
+            self._first_frame = True
         except Exception as e:
+            if target_codec == 'h264_nvenc':
+                logger.warning(f"NVENC encoder failed ({e}), falling back to libx264")
+                self.codec = 'libx264'
+                self._init_video_encoder(width, height)
+                return
             logger.error(f"Failed to start FFmpeg video encoder: {e}")
             self.active_codec = 'jpeg'
 
     def _stdout_reader(self):
         while not self._stop_event.is_set() and self._proc and self._proc.stdout:
             try:
-                # read1 is non-blocking on buffers
                 chunk = (
                     self._proc.stdout.read1(65536)
                     if hasattr(self._proc.stdout, 'read1')
-                    else self._proc.stdout.read(4096)
+                    else self._proc.stdout.read(65536)
                 )
                 if not chunk:
                     break
@@ -227,7 +300,7 @@ class HardwareEncoder:
             # Collect output NAL packets
             chunks = []
             start_time = time.time()
-            timeout = 0.1  # 100ms max wait for zerolatency frame
+            timeout = 2.0 if getattr(self, '_first_frame', False) else 0.1
 
             while time.time() - start_time < timeout:
                 try:
@@ -239,6 +312,8 @@ class HardwareEncoder:
                 except queue.Empty:
                     pass
 
+            self._first_frame = False
+
             if chunks:
                 return b''.join(chunks)
 
@@ -247,6 +322,28 @@ class HardwareEncoder:
         except Exception as e:
             logger.warning(f"Video frame encode error: {e}, falling back to JPEG")
             return self.encode_image(frame, format='jpeg', quality=self.quality)
+
+    def encode_frame(self, frame: np.ndarray) -> list[bytes]:
+        """Encode a frame and return a list of complete packets / NAL units."""
+        if self.codec in ('jpeg', 'jpg'):
+            return [self.encode_image(frame, format='jpeg', quality=self.quality)]
+
+        if self.codec == 'dummy':
+            return [b'dummy_encoded_frame_data']
+
+        data = self.encode_video_frame(frame)
+        if not data:
+            return []
+
+        if data.startswith(b'\xff\xd8'):
+            return [data]
+
+        nals = extract_nal_units(data)
+        return nals if nals else [data]
+
+    @staticmethod
+    def extract_nal_units(data: bytes) -> list[bytes]:
+        return extract_nal_units(data)
 
     def get_active_codec(self) -> str:
         return self.active_codec

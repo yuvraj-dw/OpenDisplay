@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock
 
@@ -108,6 +109,70 @@ class TestStreamer(unittest.TestCase):
     def test_context_manager(self):
         with Streamer(auto_forward=False) as streamer:
             self.assertIsNotNone(streamer)
+
+    def test_capture_and_stream_display_clamping(self):
+        mock_capture = MagicMock()
+        mock_capture.list_displays.return_value = [{'id': 0, 'width': 1920, 'height': 1080}]
+        synthetic_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_capture.capture_frame.return_value = synthetic_frame
+
+        mock_encoder = MagicMock()
+        mock_encoder.encode_frame.return_value = [b'chunk_nal_1', b'chunk_nal_2']
+
+        streamer = Streamer(
+            display_idx=5,  # Out of range index!
+            capture=mock_capture,
+            encoder=mock_encoder,
+            auto_forward=False,
+            fps=60,
+        )
+        streamer.is_running = True
+
+        mock_client1 = MagicMock()
+        mock_client2 = MagicMock()
+        streamer._clients.extend([mock_client1, mock_client2])
+
+        # Run capture_and_stream for 1 loop iteration then stop
+        def stopper():
+            time.sleep(0.03)
+            streamer._stop_event.set()
+
+        threading.Thread(target=stopper, daemon=True).start()
+        streamer.capture_and_stream()
+
+        # Verify display index was clamped to 0 (len(displays) - 1)
+        mock_capture.capture_frame.assert_called_with(display_idx=0)
+        # Verify encode_frame was called
+        mock_encoder.encode_frame.assert_called_with(synthetic_frame)
+        # Verify both chunks were broadcast to both clients
+        self.assertGreaterEqual(mock_client1.sendall.call_count, 2)
+        self.assertGreaterEqual(mock_client2.sendall.call_count, 2)
+
+    def test_capture_and_stream_no_displays_graceful_retry(self):
+        mock_capture = MagicMock()
+        # First call returns empty displays, second call returns 1 display
+        mock_capture.list_displays.side_effect = [[], [{'id': 0, 'width': 1920, 'height': 1080}]]
+        mock_capture.capture_frame.return_value = np.zeros((10, 10, 3), dtype=np.uint8)
+
+        mock_encoder = MagicMock()
+        mock_encoder.encode_frame.return_value = [b'packet']
+
+        streamer = Streamer(
+            display_idx=0,
+            capture=mock_capture,
+            encoder=mock_encoder,
+            auto_forward=False,
+        )
+        streamer.is_running = True
+
+        def stopper():
+            time.sleep(0.08)
+            streamer._stop_event.set()
+
+        threading.Thread(target=stopper, daemon=True).start()
+        # Should not raise IndexError
+        streamer.capture_and_stream()
+        self.assertGreaterEqual(mock_capture.list_displays.call_count, 2)
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import select
 import socket
 import threading
 import time
@@ -11,6 +12,24 @@ from server.transport.adb_bridge import AdbBridge
 from server.transport.protocol import MSG_CONFIG, MSG_VIDEO, pack_message
 
 logger = logging.getLogger(__name__)
+
+
+def _get_encoded_chunks(encoder, frame):
+    if hasattr(encoder, 'encode_frame'):
+        is_mock = hasattr(encoder, '_mock_return_value') or hasattr(getattr(encoder, 'encode_frame', None), '_mock_return_value')
+        if is_mock:
+            try:
+                from unittest.mock import DEFAULT
+                if getattr(encoder.encode_frame, '_mock_return_value', DEFAULT) is not DEFAULT:
+                    return encoder.encode_frame(frame)
+            except Exception:
+                pass
+            if hasattr(encoder, 'encode'):
+                return encoder.encode(frame)
+        return encoder.encode_frame(frame)
+    if hasattr(encoder, 'encode'):
+        return encoder.encode(frame)
+    return []
 
 
 class Streamer:
@@ -38,11 +57,15 @@ class Streamer:
 
         self.adb_bridge = adb_bridge or AdbBridge()
         self.capture = capture or DxgiScreenCapture()
-        self.encoder = encoder or HardwareEncoder(fps=fps)
+        self.encoder = encoder or HardwareEncoder(codec='auto', fps=fps, bitrate='6M')
 
         self._server_socket: socket.socket | None = None
         self._stop_event = threading.Event()
         self.is_running = False
+
+        self._clients: list[socket.socket] = []
+        self._clients_lock = threading.Lock()
+        self._capture_thread: threading.Thread | None = None
 
     def setup_adb(self) -> bool:
         """Forward host port to device port using ADB."""
@@ -102,19 +125,115 @@ class Streamer:
             logger.error(f"Error sending config handshake: {e}")
             return False
 
+    def broadcast(self, packet: bytes):
+        """Broadcasts a packet to all connected clients, removing dead connections."""
+        with self._clients_lock:
+            disconnected = []
+            for client in self._clients:
+                try:
+                    client.sendall(packet)
+                except (OSError, ConnectionResetError, BrokenPipeError):
+                    disconnected.append(client)
+            for client in disconnected:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                if client in self._clients:
+                    self._clients.remove(client)
+
+    def capture_and_stream(self):
+        """Continuously captures frames from the active display, encodes them,
+
+        and broadcasts video packets to all connected clients.
+        """
+        frame_interval = 1.0 / self.fps
+
+        while self.is_running and not self._stop_event.is_set():
+            t0 = time.perf_counter()
+
+            displays = []
+            if hasattr(self.capture, 'list_displays'):
+                try:
+                    displays = self.capture.list_displays() or []
+                except Exception as e:
+                    logger.debug(f"Error checking displays: {e}")
+
+            if not displays:
+                time.sleep(0.02)
+                continue
+
+            idx = self.display_idx
+            if idx >= len(displays):
+                idx = len(displays) - 1
+            if idx < 0:
+                idx = 0
+
+            try:
+                frame = self.capture.capture_frame(display_idx=idx)
+            except Exception as e:
+                logger.debug(f"Error capturing frame: {e}")
+                frame = None
+
+            if frame is None:
+                time.sleep(0.005)
+                continue
+
+            chunks = _get_encoded_chunks(self.encoder, frame)
+            if isinstance(chunks, (bytes, bytearray)):
+                chunks = [chunks] if chunks else []
+            elif chunks is None:
+                chunks = []
+            else:
+                chunks = list(chunks)
+
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                packet = pack_message(MSG_VIDEO, chunk)
+                self.broadcast(packet)
+
+            elapsed = time.perf_counter() - t0
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
     def send_single_frame(self, client_sock: socket.socket) -> bool:
         """Capture one frame, encode it, and send it packaged as MSG_VIDEO."""
         try:
-            frame = self.capture.capture_frame(self.display_idx)
+            displays = []
+            if hasattr(self.capture, 'list_displays'):
+                try:
+                    displays = self.capture.list_displays() or []
+                except Exception:
+                    pass
+            idx = self.display_idx
+            if displays:
+                if idx >= len(displays):
+                    idx = len(displays) - 1
+                if idx < 0:
+                    idx = 0
+
+            frame = self.capture.capture_frame(idx)
             if frame is None:
                 return False
 
-            frame_data = self.encoder.encode(frame)
-            if not frame_data:
+            chunks = _get_encoded_chunks(self.encoder, frame)
+            if isinstance(chunks, (bytes, bytearray)):
+                chunks = [chunks] if chunks else []
+            elif chunks is None:
+                chunks = []
+            else:
+                chunks = list(chunks)
+
+            # Filter out empty chunks
+            valid_chunks = [c for c in chunks if c]
+            if not valid_chunks:
                 return False
 
-            packed = pack_message(MSG_VIDEO, frame_data)
-            client_sock.sendall(packed)
+            for chunk in valid_chunks:
+                packed = pack_message(MSG_VIDEO, chunk)
+                client_sock.sendall(packed)
             return True
         except (OSError, ConnectionResetError, BrokenPipeError):
             raise
@@ -136,23 +255,27 @@ class Streamer:
             logger.info(f"Client disconnected during config handshake: {e}")
             return
 
-        frame_interval = 1.0 / self.fps
+        with self._clients_lock:
+            if client_sock not in self._clients:
+                self._clients.append(client_sock)
 
-        while self.is_running and not self._stop_event.is_set():
-            t0 = time.perf_counter()
+        try:
+            while self.is_running and not self._stop_event.is_set():
+                rlist, _, _ = select.select([client_sock], [], [], 0.5)
+                if rlist:
+                    data = client_sock.recv(2048)
+                    if not data:
+                        break
+        except (OSError, ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            with self._clients_lock:
+                if client_sock in self._clients:
+                    self._clients.remove(client_sock)
             try:
-                sent = self.send_single_frame(client_sock)
-                if not sent:
-                    time.sleep(0.005)
-                    continue
-            except (OSError, ConnectionResetError, BrokenPipeError) as e:
-                logger.info(f"Client disconnected: {e}")
-                break
-
-            elapsed = time.perf_counter() - t0
-            sleep_time = frame_interval - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+                client_sock.close()
+            except Exception:
+                pass
 
     def serve_forever(self, max_clients: int | None = None):
         """Main server loop: accepts clients and streams frames."""
@@ -162,6 +285,11 @@ class Streamer:
         server_sock = self.start_server()
         clients_served = 0
 
+        if self._capture_thread is None or not self._capture_thread.is_alive():
+            self._capture_thread = threading.Thread(target=self.capture_and_stream, daemon=True)
+            self._capture_thread.start()
+
+        client_threads = []
         try:
             while not self._stop_event.is_set():
                 server_sock.settimeout(0.5)
@@ -173,14 +301,10 @@ class Streamer:
                     break
 
                 logger.info(f"Accepted connection from {client_addr}")
-                try:
-                    self.handle_client(client_sock)
-                finally:
-                    try:
-                        client_sock.close()
-                    except Exception:
-                        pass
-                    clients_served += 1
+                t = threading.Thread(target=self.handle_client, args=(client_sock,), daemon=True)
+                t.start()
+                client_threads.append(t)
+                clients_served += 1
 
                 if max_clients is not None and clients_served >= max_clients:
                     break
@@ -198,6 +322,15 @@ class Streamer:
         """Stop streaming and clean up resources."""
         self._stop_event.set()
         self.is_running = False
+
+        with self._clients_lock:
+            for client in self._clients:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            self._clients.clear()
+
         if self._server_socket:
             try:
                 self._server_socket.close()

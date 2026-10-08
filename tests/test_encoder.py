@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from server.encoder.hw_encoder import HardwareEncoder, HwEncoder
+from server.encoder.hw_encoder import HardwareEncoder, HwEncoder, extract_nal_units
 
 
 class TestHardwareEncoder(unittest.TestCase):
@@ -34,6 +34,34 @@ class TestHardwareEncoder(unittest.TestCase):
             data2 = encoder.encode(self.frame)
             self.assertGreater(len(data1), 0)
             self.assertGreater(len(data2), 0)
+
+    def test_extract_nal_units(self):
+        self.assertEqual(extract_nal_units(b''), [])
+        self.assertEqual(extract_nal_units(b'no_start_code'), [b'no_start_code'])
+
+        raw = b'\x00\x00\x00\x01\x67SPS\x00\x00\x00\x01\x68PPS\x00\x00\x01\x65IDR'
+        nals = extract_nal_units(raw)
+        self.assertEqual(len(nals), 3)
+        self.assertEqual(nals[0], b'\x00\x00\x00\x01\x67SPS')
+        self.assertEqual(nals[1], b'\x00\x00\x00\x01\x68PPS')
+        self.assertEqual(nals[2], b'\x00\x00\x01\x65IDR')
+
+    def test_encode_frame_nal_units(self):
+        with HardwareEncoder(codec='dummy') as encoder:
+            chunks = encoder.encode_frame(self.frame)
+            self.assertEqual(chunks, [b'dummy_encoded_frame_data'])
+
+        with HardwareEncoder(codec='jpeg') as encoder:
+            chunks = encoder.encode_frame(self.frame)
+            self.assertEqual(len(chunks), 1)
+            self.assertEqual(chunks[0][:2], b'\xff\xd8')
+
+        with HardwareEncoder(codec='auto', width=640, height=480, fps=60) as encoder:
+            chunks = encoder.encode_frame(self.frame)
+            self.assertIsInstance(chunks, list)
+            self.assertGreater(len(chunks), 0)
+            for chunk in chunks:
+                self.assertTrue(chunk.startswith(b'\x00\x00\x00\x01') or chunk.startswith(b'\x00\x00\x01') or chunk.startswith(b'\xff\xd8'))
 
 
 if __name__ == '__main__':

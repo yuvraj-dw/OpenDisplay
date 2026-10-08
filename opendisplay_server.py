@@ -56,21 +56,6 @@ def is_admin():
     except Exception:
         return False
 
-def ensure_elevated():
-    """Request administrative elevation once on launch to prevent repeated UAC prompts."""
-    if not is_admin():
-        try:
-            if getattr(sys, 'frozen', False):
-                exe = sys.executable
-                args = " ".join([f'"{a}"' for a in sys.argv[1:]])
-            else:
-                exe = sys.executable
-                args = f'"{os.path.abspath(__file__)}" ' + " ".join([f'"{a}"' for a in sys.argv[1:]])
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, args, None, 1)
-            sys.exit(0)
-        except Exception:
-            pass
-
 def _find_devcon():
     candidates = [
         os.path.join(os.path.dirname(sys.executable), "devcon.exe"),
@@ -160,29 +145,12 @@ def align_secondary_display_bottom_left(refresh_rate=165):
         pass
 
 def disable_virtual_display():
-    """Terminates the virtual display when OpenDisplay stops, returning Windows to a single monitor."""
-    print("[OpenDisplay] Disconnecting virtual extended monitor...")
-    _run_devcon("disable")
-    print("[OpenDisplay] Virtual monitor disconnected successfully.")
-
-# Register exit hooks so the display unplugs when the process closes
-atexit.register(disable_virtual_display)
-
-try:
-    PHANDLER_ROUTINE = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
-    def _console_ctrl_handler(dwCtrlType):
-        disable_virtual_display()
-        return False
-    _ctrl_func = PHANDLER_ROUTINE(_console_ctrl_handler)
-    ctypes.windll.kernel32.SetConsoleCtrlHandler(_ctrl_func, True)
-except Exception:
-    pass
-
-try:
-    signal.signal(signal.SIGINT, lambda s, f: (disable_virtual_display(), sys.exit(0)))
-    signal.signal(signal.SIGTERM, lambda s, f: (disable_virtual_display(), sys.exit(0)))
-except Exception:
-    pass
+    """Detaches the virtual display driver if elevated."""
+    try:
+        if is_admin():
+            _run_devcon("disable")
+    except Exception:
+        pass
 
 HTML_VIEWER = """<!DOCTYPE html>
 <html>
@@ -376,8 +344,7 @@ class USBMonitorThread(threading.Thread):
                             self.server.tray.update_status(True)
                     else:
                         if self.last_connected is not None:
-                            print("[OpenDisplay] Tablet USB unplugged. Disconnecting virtual monitor...")
-                            disable_virtual_display()
+                            print("[OpenDisplay] Tablet USB unplugged.")
                             if hasattr(self.server, 'tray') and self.server.tray:
                                 self.server.tray.update_status(False)
             except Exception:
@@ -390,7 +357,10 @@ class OpenDisplayServer:
         self.display_idx = display_idx
         self.fps = fps
         self.capture = DxgiScreenCapture(backend="auto")
+        self.h264_encoder = HardwareEncoder(codec="auto", fps=fps, bitrate="6M")
         self.encoder = HardwareEncoder(codec="jpeg", fps=fps, quality=65)
+        self.streamer = None
+        self.streamer_7070 = None
         self.latest_frame_jpeg = None
         self.frame_condition = threading.Condition()
         self.frame_id = 0
@@ -435,9 +405,16 @@ class OpenDisplayServer:
         self.is_running = False
         with self.frame_condition:
             self.frame_condition.notify_all()
+        if self.streamer:
+            try:
+                self.streamer.stop()
+            except Exception:
+                pass
         if self.tray:
-            self.tray.destroy()
-        disable_virtual_display()
+            try:
+                self.tray.destroy()
+            except Exception:
+                pass
         if self.httpd:
             try:
                 self.httpd.shutdown()
@@ -672,16 +649,17 @@ class OpenDisplayServer:
         print(f"[OpenDisplay] Running in background and System Tray (http://127.0.0.1:{self.port})")
 
         # Start native binary streamer on tcp:7070
-        self.streamer_7070 = Streamer(
+        self.streamer = Streamer(
             host="0.0.0.0",
             port=STREAM_PORT,
             display_idx=self.display_idx,
             fps=self.fps,
             capture=self.capture,
-            encoder=self.encoder,
+            encoder=self.h264_encoder,
             auto_forward=False,
         )
-        self.streamer_7070.start_background()
+        self.streamer_7070 = self.streamer
+        self.streamer.start_background()
 
         try:
             self.httpd.serve_forever()
@@ -691,7 +669,6 @@ class OpenDisplayServer:
             self.stop()
 
 if __name__ == "__main__":
-    ensure_elevated()
     enable_virtual_display()
 
     temp_cap = DxgiScreenCapture(backend="auto")
