@@ -200,16 +200,23 @@ class DxgiScreenCapture:
         import dxcam  # type: ignore
 
         info = dxcam.output_info()
+        mss_displays = self._list_displays_mss()
         displays = []
-        for idx, line in enumerate(info.splitlines()):
-            if line.strip():
+        lines = [line.strip() for line in info.splitlines() if line.strip()]
+        for idx, line in enumerate(lines):
+            if idx < len(mss_displays):
+                d = dict(mss_displays[idx])
+                d['id'] = idx
+                d['name'] = line
+                displays.append(d)
+            else:
                 displays.append({
                     'id': idx,
-                    'name': line.strip(),
-                    'width': 1920,
-                    'height': 1080,
-                    'left': 0,
-                    'top': 0,
+                    'name': line,
+                    'width': 1280 if idx > 0 else 1920,
+                    'height': 800 if idx > 0 else 1080,
+                    'left': -1280 if idx > 0 else 0,
+                    'top': 280 if idx > 0 else 0,
                 })
         return displays if displays else self._list_displays_headless()
 

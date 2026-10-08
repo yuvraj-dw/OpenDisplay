@@ -7,7 +7,10 @@ echo          OpenDisplay - USB Extended Monitor Setup
 echo ========================================================
 echo.
 
-set ADB=app_win\adb.exe
+set ADB="%~dp0app_win\adb.exe"
+if not exist %ADB% (
+    if exist "%~dp0adb.exe" set ADB="%~dp0adb.exe"
+)
 where adb >nul 2>nul
 if %errorlevel% equ 0 (
     set ADB=adb
@@ -15,6 +18,9 @@ if %errorlevel% equ 0 (
 
 :: Step 0: Ensure Virtual Extended Screen is Enabled
 set DEVCON="%~dp0server\driver\vdd_bin\VirtualDisplayDriver\devcon.exe"
+if not exist %DEVCON% (
+    if exist "%~dp0devcon.exe" set DEVCON="%~dp0devcon.exe"
+)
 if exist %DEVCON% (
     %DEVCON% status Root\MttVDD | findstr /i "running" >nul
     if %errorlevel% neq 0 (
@@ -57,6 +63,8 @@ echo Starting OpenDisplay Windows Host Streamer...
 echo ========================================================
 if exist "dist\OpenDisplay\OpenDisplay.exe" (
     start "" "dist\OpenDisplay\OpenDisplay.exe"
+) else if exist "OpenDisplay.exe" (
+    start "" "OpenDisplay.exe"
 ) else (
     start "" python opendisplay_server.py
 )

@@ -83,7 +83,7 @@ public class StreamReceiver extends Thread {
 
                 while (isRunning) {
                     int totalLen = dis.readInt();
-                    if (totalLen < 1) {
+                    if (totalLen < 1 || totalLen > 16 * 1024 * 1024) {
                         throw new IOException("Invalid packet total length: " + totalLen);
                     }
                     int msgType = dis.readByte() & 0xFF;

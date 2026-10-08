@@ -141,6 +141,8 @@ class HardwareEncoder:
             '-',
             '-c:v',
             target_codec,
+            '-pix_fmt',
+            'yuv420p',
         ]
 
         if target_codec == 'libx264':
@@ -338,8 +340,7 @@ class HardwareEncoder:
         if data.startswith(b'\xff\xd8'):
             return [data]
 
-        nals = extract_nal_units(data)
-        return nals if nals else [data]
+        return [data]
 
     @staticmethod
     def extract_nal_units(data: bytes) -> list[bytes]:

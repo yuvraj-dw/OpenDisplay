@@ -104,14 +104,34 @@ public class H264Decoder {
                         inputBuffer.clear();
                         inputBuffer.put(data, offset, length);
                         long pts = presentationTimeUs > 0 ? presentationTimeUs : (System.nanoTime() / 1000L);
-                        codec.queueInputBuffer(inputIndex, 0, length, pts, 0);
+
+                        int flags = 0;
+                        boolean hasSlice = false;
+                        boolean hasConfig = false;
+                        for (int i = offset; i < offset + length - 4; i++) {
+                            if (data[i] == 0 && data[i + 1] == 0 && (data[i + 2] == 1 || (data[i + 2] == 0 && data[i + 3] == 1))) {
+                                int headerIdx = (data[i + 2] == 1) ? (i + 3) : (i + 4);
+                                int nalType = data[headerIdx] & 0x1F;
+                                if (nalType == 1 || nalType == 5) {
+                                    hasSlice = true;
+                                    break;
+                                } else if (nalType == 7 || nalType == 8) {
+                                    hasConfig = true;
+                                }
+                            }
+                        }
+                        if (!hasSlice && hasConfig) {
+                            flags = MediaCodec.BUFFER_FLAG_CODEC_CONFIG;
+                        }
+
+                        codec.queueInputBuffer(inputIndex, 0, length, pts, flags);
                     }
                 } else {
                     Log.w(TAG, "Input buffer dequeue timed out, dropping frame slice");
                 }
                 drainOutput(codec);
             } catch (IllegalStateException e) {
-                Log.e(TAG, "MediaCodec invalid state: " + e.getMessage() + ". Resetting...");
+                Log.e(TAG, "MediaCodec invalid state: " + e.getMessage(), e);
                 try {
                     stopAndReleaseCodecInternal();
                     if (surface != null && surface.isValid()) {

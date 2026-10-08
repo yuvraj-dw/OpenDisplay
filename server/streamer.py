@@ -410,6 +410,7 @@ class Streamer:
                     break
 
                 logger.info(f"Accepted connection from {client_addr}")
+                client_threads = [th for th in client_threads if th.is_alive()]
                 t = threading.Thread(target=self._handle_client, args=(client_sock,), daemon=True)
                 t.start()
                 client_threads.append(t)
