@@ -1,8 +1,10 @@
 import argparse
+import ctypes
 import json
 import logging
 import select
 import socket
+import sys
 import threading
 import time
 
@@ -12,6 +14,9 @@ from server.transport.adb_bridge import AdbBridge
 from server.transport.protocol import MSG_CONFIG, MSG_VIDEO, pack_message
 
 logger = logging.getLogger(__name__)
+
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
 
 
 def _get_encoded_chunks(encoder, frame):
@@ -241,12 +246,78 @@ class Streamer:
             logger.error(f"Error encoding or sending frame: {e}")
             return False
 
-    def handle_client(self, client_sock: socket.socket):
-        """Streaming loop for an accepted client connection."""
+    def handle_input_event(
+        self,
+        action: str,
+        normX: float = 0.0,
+        normY: float = 0.0,
+        display_idx: int | None = None,
+        norm_x: float | None = None,
+        norm_y: float | None = None,
+    ) -> tuple[int, int]:
+        """Process incoming touch/mouse action and map to target display coordinates.
+
+        Calculates target screen coordinates:
+            tx = int(left + normX * width)
+            ty = int(top + normY * height)
+        Dispatches cursor position and mouse events via Win32 user32 APIs.
+        """
+        if norm_x is not None:
+            normX = norm_x
+        if norm_y is not None:
+            normY = norm_y
+
+        try:
+            normX = float(normX)
+            normY = float(normY)
+        except (ValueError, TypeError):
+            normX, normY = 0.0, 0.0
+
+        left, top, width, height = 0, 0, 1920, 1080
+        displays = []
+        if hasattr(self.capture, 'list_displays'):
+            try:
+                displays = self.capture.list_displays() or []
+            except Exception as e:
+                logger.debug(f"Error querying display info for input event: {e}")
+
+        if displays:
+            target_idx = display_idx if display_idx is not None else self.display_idx
+            if target_idx < 0 or target_idx >= len(displays):
+                target_idx = len(displays) - 1 if target_idx >= len(displays) else 0
+            target_disp = displays[target_idx]
+            left = target_disp.get('left', 0) or 0
+            top = target_disp.get('top', 0) or 0
+            width = target_disp.get('width', 1920) or 1920
+            height = target_disp.get('height', 1080) or 1080
+
+        tx = int(left + normX * width)
+        ty = int(top + normY * height)
+
+        act = action.lower() if isinstance(action, str) else ''
+        try:
+            if hasattr(ctypes, 'windll') and hasattr(ctypes.windll, 'user32'):
+                ctypes.windll.user32.SetCursorPos(tx, ty)
+                if act == 'down':
+                    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                elif act == 'up':
+                    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        except Exception as e:
+            logger.debug(f"Failed to execute Win32 mouse event: {e}")
+
+        return tx, ty
+
+    def _handle_client(self, client_sock: socket.socket):
+        """Streaming loop and client event reader for an accepted client connection."""
         try:
             client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception as e:
             logger.debug(f"Failed setting TCP_NODELAY on client socket: {e}")
+
+        try:
+            client_sock.settimeout(0.5)
+        except Exception:
+            pass
 
         logger.info("Client connected. Starting screen capture stream...")
         try:
@@ -259,13 +330,47 @@ class Streamer:
             if client_sock not in self._clients:
                 self._clients.append(client_sock)
 
+        if not self._stop_event.is_set():
+            self.is_running = True
+
+        buffer = ""
         try:
             while self.is_running and not self._stop_event.is_set():
-                rlist, _, _ = select.select([client_sock], [], [], 0.5)
-                if rlist:
+                try:
+                    rlist, _, _ = select.select([client_sock], [], [], 0.5)
+                    if not rlist:
+                        continue
+                except (ValueError, TypeError, OSError):
+                    pass
+
+                try:
                     data = client_sock.recv(2048)
-                    if not data:
-                        break
+                except (socket.timeout, TimeoutError):
+                    continue
+                except (OSError, ConnectionResetError, BrokenPipeError):
+                    break
+
+                if not data:
+                    break
+
+                try:
+                    buffer += data.decode('utf-8', errors='ignore')
+                except Exception:
+                    continue
+
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    line = line.strip()
+                    if line.startswith('m:'):
+                        parts = line.split(':')
+                        if len(parts) == 4:
+                            action = parts[1].strip()
+                            try:
+                                normX = float(parts[2].strip())
+                                normY = float(parts[3].strip())
+                                self.handle_input_event(action, normX, normY)
+                            except ValueError as e:
+                                logger.debug(f"Invalid float in mouse event line '{line}': {e}")
         except (OSError, ConnectionResetError, BrokenPipeError):
             pass
         finally:
@@ -276,6 +381,10 @@ class Streamer:
                 client_sock.close()
             except Exception:
                 pass
+
+    def handle_client(self, client_sock: socket.socket):
+        """Streaming loop for an accepted client connection."""
+        return self._handle_client(client_sock)
 
     def serve_forever(self, max_clients: int | None = None):
         """Main server loop: accepts clients and streams frames."""
@@ -301,7 +410,7 @@ class Streamer:
                     break
 
                 logger.info(f"Accepted connection from {client_addr}")
-                t = threading.Thread(target=self.handle_client, args=(client_sock,), daemon=True)
+                t = threading.Thread(target=self._handle_client, args=(client_sock,), daemon=True)
                 t.start()
                 client_threads.append(t)
                 clients_served += 1

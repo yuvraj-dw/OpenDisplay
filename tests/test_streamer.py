@@ -2,7 +2,7 @@ import socket
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 
@@ -173,6 +173,95 @@ class TestStreamer(unittest.TestCase):
         # Should not raise IndexError
         streamer.capture_and_stream()
         self.assertGreaterEqual(mock_capture.list_displays.call_count, 2)
+
+    def test_handle_input_event_computes_coords_and_dispatches_down(self):
+        mock_capture = MagicMock()
+        mock_capture.list_displays.return_value = [
+            {'id': 0, 'left': 0, 'top': 0, 'width': 1920, 'height': 1080},
+            {'id': 1, 'left': 1920, 'top': 0, 'width': 1280, 'height': 800},
+        ]
+        streamer = Streamer(display_idx=1, capture=mock_capture, auto_forward=False)
+
+        with patch('ctypes.windll.user32.SetCursorPos') as mock_set_cursor, \
+             patch('ctypes.windll.user32.mouse_event') as mock_mouse_event:
+            coords = streamer.handle_input_event('down', 0.5, 0.5)
+
+            # Target display 1: left=1920, top=0, width=1280, height=800
+            # tx = 1920 + 0.5 * 1280 = 2560; ty = 0 + 0.5 * 800 = 400
+            self.assertEqual(coords, (2560, 400))
+            mock_set_cursor.assert_called_once_with(2560, 400)
+            mock_mouse_event.assert_called_once_with(0x0002, 0, 0, 0, 0)
+
+    def test_handle_input_event_computes_coords_and_dispatches_up(self):
+        mock_capture = MagicMock()
+        mock_capture.list_displays.return_value = [
+            {'id': 0, 'left': 0, 'top': 0, 'width': 1920, 'height': 1080},
+            {'id': 1, 'left': 1920, 'top': 0, 'width': 1280, 'height': 800},
+        ]
+        streamer = Streamer(display_idx=1, capture=mock_capture, auto_forward=False)
+
+        with patch('ctypes.windll.user32.SetCursorPos') as mock_set_cursor, \
+             patch('ctypes.windll.user32.mouse_event') as mock_mouse_event:
+            coords = streamer.handle_input_event('up', 0.25, 0.75)
+
+            # tx = 1920 + 0.25 * 1280 = 2240; ty = 0 + 0.75 * 800 = 600
+            self.assertEqual(coords, (2240, 600))
+            mock_set_cursor.assert_called_once_with(2240, 600)
+            mock_mouse_event.assert_called_once_with(0x0004, 0, 0, 0, 0)
+
+    def test_handle_input_event_computes_coords_and_dispatches_move(self):
+        mock_capture = MagicMock()
+        mock_capture.list_displays.return_value = [
+            {'id': 0, 'left': 0, 'top': 0, 'width': 1920, 'height': 1080},
+            {'id': 1, 'left': 1920, 'top': 0, 'width': 1280, 'height': 800},
+        ]
+        streamer = Streamer(display_idx=1, capture=mock_capture, auto_forward=False)
+
+        with patch('ctypes.windll.user32.SetCursorPos') as mock_set_cursor, \
+             patch('ctypes.windll.user32.mouse_event') as mock_mouse_event:
+            coords = streamer.handle_input_event('move', 0.1, 0.2)
+
+            # tx = 1920 + 0.1 * 1280 = 2048; ty = 0 + 0.2 * 800 = 160
+            self.assertEqual(coords, (2048, 160))
+            mock_set_cursor.assert_called_once_with(2048, 160)
+            mock_mouse_event.assert_not_called()
+
+    def test_handle_client_parses_mouse_event(self):
+        streamer = Streamer(auto_forward=False)
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = [b'm:down:0.5:0.5\n', b'']
+
+        with patch.object(streamer, 'handle_input_event') as mock_handle:
+            streamer._handle_client(mock_sock)
+            mock_handle.assert_called_once_with('down', 0.5, 0.5)
+
+    def test_handle_client_buffered_stream(self):
+        streamer = Streamer(auto_forward=False)
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = [
+            b'm:do',
+            b'wn:0.25:0.75\nm:up:0.1:0.2\n',
+            b'',
+        ]
+
+        with patch.object(streamer, 'handle_input_event') as mock_handle:
+            streamer._handle_client(mock_sock)
+            mock_handle.assert_has_calls([
+                call('down', 0.25, 0.75),
+                call('up', 0.1, 0.2),
+            ])
+
+    def test_handle_client_ignores_invalid_format(self):
+        streamer = Streamer(auto_forward=False)
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = [
+            b'some_other_data\nm:invalid_action\nm:down:not_a_float:0.5\n',
+            b'',
+        ]
+
+        with patch.object(streamer, 'handle_input_event') as mock_handle:
+            streamer._handle_client(mock_sock)
+            mock_handle.assert_not_called()
 
 
 if __name__ == '__main__':
