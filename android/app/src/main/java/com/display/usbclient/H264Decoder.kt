@@ -13,8 +13,8 @@ import java.io.IOException
  */
 class H264Decoder(
     private var surface: Surface? = null,
-    private var width: Int = 1920,
-    private var height: Int = 1080
+    private var width: Int = 1280,
+    private var height: Int = 800
 ) {
     companion object {
         private const val TAG = "H264Decoder"
@@ -62,10 +62,10 @@ class H264Decoder(
             val format = MediaFormat.createVideoFormat(MIME_TYPE, w, h).apply {
                 // Low-latency configuration for real-time display streaming
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    try {
+                        setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    } catch (ignored: Exception) {}
                 }
-                setInteger(MediaFormat.KEY_OPERATING_RATE, 120)
-                setInteger(MediaFormat.KEY_PRIORITY, 0) // Realtime priority
             }
 
             val decoder = MediaCodec.createDecoderByType(MIME_TYPE)

@@ -107,8 +107,8 @@ class StreamReceiver(
             val jsonStr = String(payload, Charsets.UTF_8)
             Log.i(TAG, "Received MSG_CONFIG: $jsonStr")
             val json = JSONObject(jsonStr)
-            val width = json.optInt("width", 1920)
-            val height = json.optInt("height", 1080)
+            val width = json.optInt("width", 1280)
+            val height = json.optInt("height", 800)
             val fps = json.optInt("fps", 60)
             listener?.onConfigReceived(width, height, fps)
         } catch (e: Exception) {
@@ -117,7 +117,7 @@ class StreamReceiver(
     }
 
     private fun handleVideo(payload: ByteArray) {
-        decoder?.decodeFrame(payload)
+            decoder?.decodeFrame(payload, 0, payload.size, 0)
         listener?.onVideoFrame(payload)
     }
 

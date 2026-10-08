@@ -14,8 +14,8 @@ public class H264Decoder {
     private static final long DEFAULT_TIMEOUT_US = 5000L;
 
     private Surface surface;
-    private int width = 1920;
-    private int height = 1080;
+    private int width = 1280;
+    private int height = 800;
     private MediaCodec codec;
     private final MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
     private final Object lock = new Object();
@@ -32,7 +32,7 @@ public class H264Decoder {
     }
 
     public H264Decoder(Surface surface) {
-        this(surface, 1920, 1080);
+        this(surface, 1280, 800);
     }
 
     public void configure(Surface targetSurface, int targetWidth, int targetHeight) {
@@ -127,7 +127,8 @@ public class H264Decoder {
     }
 
     public void decodeFrame(byte[] data) {
-        decodeFrame(data, 0, data.length, System.nanoTime() / 1000L);
+        if (data == null) return;
+        decodeFrame(data, 0, data.length, 0);
     }
 
     private void drainOutput(MediaCodec activeCodec) {

@@ -4,17 +4,23 @@ import android.app.Activity;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
-    private WebView webView;
+    private static final String STREAM_HOST = "127.0.0.1";
+    private static final int STREAM_PORT = 7070;
+
+    private SurfaceView surfaceView;
+    private H264Decoder decoder;
+    private StreamReceiver receiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -23,54 +29,102 @@ public class MainActivity extends Activity {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         enableFullscreenImmersive();
 
-        webView = new WebView(this);
-        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setLoadWithOverviewMode(true);
-        settings.setUseWideViewPort(true);
-        settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
-
-        webView.setWebViewClient(new WebViewClient() {
+        surfaceView = new SurfaceView(this);
+        surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
-            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                view.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        view.loadUrl("http://127.0.0.1:8080/");
-                    }
-                }, 1000);
+            public void surfaceCreated(SurfaceHolder holder) {
+                Log.i(TAG, "Surface created, initializing H264Decoder and StreamReceiver");
+                stopPipeline();
+                try {
+                    decoder = new H264Decoder(holder.getSurface(), 1280, 800);
+                    receiver = new StreamReceiver(decoder, STREAM_HOST, STREAM_PORT, 1000L, new StreamReceiver.Listener() {
+                        @Override
+                        public void onConnected() {
+                            Log.i(TAG, "StreamReceiver connected to " + STREAM_HOST + ":" + STREAM_PORT);
+                        }
+
+                        @Override
+                        public void onDisconnected() {
+                            Log.i(TAG, "StreamReceiver disconnected");
+                        }
+
+                        @Override
+                        public void onConfigReceived(int width, int height, int fps) {
+                            Log.i(TAG, "Config received: " + width + "x" + height + " @" + fps + "fps");
+                            if (decoder != null && surfaceView != null) {
+                                Surface surface = surfaceView.getHolder().getSurface();
+                                if (surface != null && surface.isValid()) {
+                                    decoder.configure(surface, width, height);
+                                }
+                            }
+                        }
+
+                        @Override
+                        public void onVideoFrame(byte[] payload) {
+                        }
+
+                        @Override
+                        public void onImageFrame(byte[] payload) {
+                        }
+                    });
+                    receiver.start();
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed initializing decoder or receiver: " + e.getMessage(), e);
+                }
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                Log.i(TAG, "Surface changed: " + width + "x" + height);
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                Log.i(TAG, "Surface destroyed, releasing pipeline");
+                stopPipeline();
             }
         });
 
-        webView.loadUrl("http://127.0.0.1:8080/");
-        setContentView(webView);
+        setContentView(surfaceView);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         enableFullscreenImmersive();
-        if (webView != null) {
-            webView.onResume();
-        }
     }
 
     @Override
-    protected void onPause() {
-        super.onPause();
-        if (webView != null) {
-            webView.onPause();
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            enableFullscreenImmersive();
         }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (webView != null) {
-            webView.destroy();
+        stopPipeline();
+    }
+
+    private synchronized void stopPipeline() {
+        if (receiver != null) {
+            try {
+                receiver.stopReceiver();
+            } catch (Exception e) {
+                Log.w(TAG, "Error stopping receiver: " + e.getMessage());
+            }
+            receiver = null;
+        }
+
+        if (decoder != null) {
+            try {
+                decoder.release();
+            } catch (Exception e) {
+                Log.w(TAG, "Error releasing decoder: " + e.getMessage());
+            }
+            decoder = null;
         }
     }
 

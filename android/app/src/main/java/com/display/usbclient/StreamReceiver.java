@@ -116,8 +116,8 @@ public class StreamReceiver extends Thread {
             String jsonStr = new String(payload, StandardCharsets.UTF_8);
             Log.i(TAG, "Received MSG_CONFIG: " + jsonStr);
             JSONObject json = new JSONObject(jsonStr);
-            int width = json.optInt("width", 1920);
-            int height = json.optInt("height", 1080);
+            int width = json.optInt("width", 1280);
+            int height = json.optInt("height", 800);
             int fps = json.optInt("fps", 60);
             if (listener != null) listener.onConfigReceived(width, height, fps);
         } catch (Exception e) {
@@ -126,14 +126,15 @@ public class StreamReceiver extends Thread {
     }
 
     private void handleVideo(byte[] payload) {
-        boolean isJpeg = payload != null && payload.length > 2 && (payload[0] & 0xFF) == 0xFF && (payload[1] & 0xFF) == 0xD8;
+        if (payload == null || payload.length == 0) return;
+        boolean isJpeg = payload.length > 2 && (payload[0] & 0xFF) == 0xFF && (payload[1] & 0xFF) == 0xD8;
         if (isJpeg) {
             if (listener != null) {
                 listener.onImageFrame(payload);
             }
         } else {
             if (decoder != null) {
-                decoder.decodeFrame(payload);
+                decoder.decodeFrame(payload, 0, payload.length, 0);
             }
             if (listener != null) {
                 listener.onVideoFrame(payload);
