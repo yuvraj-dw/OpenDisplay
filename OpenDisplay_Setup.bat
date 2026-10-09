@@ -35,6 +35,17 @@ echo [Step 1/4] Checking connected Android devices...
 %ADB% devices
 echo.
 
+:: Step 1.5: Install AOAP WinUSB Driver
+echo [Step 1.5/4] Installing OpenDisplay AOAP WinUSB Driver...
+if exist "%~dp0server\driver\aoap_bin\opendisplay_aoap.inf" (
+    pnputil.exe /add-driver "%~dp0server\driver\aoap_bin\opendisplay_aoap.inf" /install >nul 2>nul
+) else if exist "%~dp0opendisplay_aoap.inf" (
+    pnputil.exe /add-driver "%~dp0opendisplay_aoap.inf" /install >nul 2>nul
+) else (
+    pnputil.exe /add-driver "server\driver\aoap_bin\opendisplay_aoap.inf" /install >nul 2>nul
+)
+echo.
+
 :: Step 2: Install APK onto device if connected
 echo [Step 2/4] Installing OpenDisplay.apk onto tablet...
 %ADB% install -r -d "OpenDisplay.apk"

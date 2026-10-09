@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: `server/driver/aoap_bin/opendisplay_aoap.inf` with DeviceInterfaceGUID `{E1D13C8D-9B21-4E87-873B-15BC9C21A77E}` and hardware IDs `USB\VID_18D1&PID_2D00` and `USB\VID_18D1&PID_2D01`.
 
-- [ ] **Step 1: Write the failing test for Driver INF structure and GUID validation**
+- [x] **Step 1: Write the failing test for Driver INF structure and GUID validation**
 
 ```python
 # tests/test_driver_inf.py
@@ -56,12 +56,12 @@ if __name__ == '__main__':
     unittest.main()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m unittest tests/test_driver_inf.py`
 Expected: FAIL with "INF file must exist"
 
-- [ ] **Step 3: Create Driver INF and install script**
+- [x] **Step 3: Create Driver INF and install script**
 
 Create `server/driver/aoap_bin/opendisplay_aoap.inf`:
 ```ini
@@ -128,12 +128,12 @@ if %errorlevel% neq 0 (
 echo Driver installation complete.
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m unittest tests/test_driver_inf.py`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/test_driver_inf.py server/driver/aoap_bin/opendisplay_aoap.inf install_aoap_driver.bat
@@ -157,7 +157,7 @@ git commit -m "feat(driver): add opendisplay_aoap.inf and installer script"
   - `read_packet(timeout_ms: int = 1000) -> tuple[int, bytes] | None`
   - `switch_aoap(vendor_id: int, product_id: int) -> bool`
 
-- [ ] **Step 1: Write the failing unit test with mocks for WinUSB and SetupAPI**
+- [x] **Step 1: Write the failing unit test with mocks for WinUSB and SetupAPI**
 
 ```python
 # tests/test_winusb_transport.py
@@ -185,12 +185,12 @@ if __name__ == '__main__':
     unittest.main()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m unittest tests/test_winusb_transport.py`
-Expected: FAIL with "No module named 'server.transport.winusb_transport'"
+Expected: FAIL
 
-- [ ] **Step 3: Implement `WinUsbTransport` in `server/transport/winusb_transport.py`**
+- [x] **Step 3: Implement `WinUsbTransport` in `server/transport/winusb_transport.py`**
 
 ```python
 # server/transport/winusb_transport.py
@@ -370,12 +370,12 @@ class WinUsbTransport:
             self.handle = None
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m unittest tests/test_winusb_transport.py`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/test_winusb_transport.py server/transport/winusb_transport.py
@@ -396,7 +396,7 @@ git commit -m "feat(transport): implement pure python winusb transport"
 **Interfaces:**
 - Produces: `StreamReceiver(UsbAccessory accessory, Context context, StreamListener listener)` constructor supporting native file descriptors and automatic failover to TCP socket.
 
-- [ ] **Step 1: Create `accessory_filter.xml`**
+- [x] **Step 1: Create `accessory_filter.xml`**
 
 Create `android/app/src/main/res/xml/accessory_filter.xml`:
 ```xml
@@ -409,7 +409,7 @@ Create `android/app/src/main/res/xml/accessory_filter.xml`:
 </resources>
 ```
 
-- [ ] **Step 2: Update `AndroidManifest.xml`**
+- [x] **Step 2: Update `AndroidManifest.xml`**
 
 Add `<uses-feature android:name="android.hardware.usb.accessory" android:required="false" />` and intent filter:
 ```xml
@@ -432,7 +432,7 @@ Add `<uses-feature android:name="android.hardware.usb.accessory" android:require
         </activity>
 ```
 
-- [ ] **Step 3: Update `StreamReceiver.java` to support `UsbAccessory` streams**
+- [x] **Step 3: Update `StreamReceiver.java` to support `UsbAccessory` streams**
 
 Add secondary constructor and accessory lifecycle:
 ```java
@@ -453,7 +453,7 @@ Add secondary constructor and accessory lifecycle:
 ```
 In `run()`: if `accessory != null`, call `UsbManager.openAccessory(accessory)` and wrap `FileInputStream` / `FileOutputStream` instead of Socket.
 
-- [ ] **Step 4: Update `MainActivity.java` to detect `UsbAccessory`**
+- [x] **Step 4: Update `MainActivity.java` to detect `UsbAccessory`**
 
 In `initReceiver()`:
 ```java
@@ -475,7 +475,7 @@ In `initReceiver()`:
         }
 ```
 
-- [ ] **Step 5: Verify build with `build_apk.ps1` and commit**
+- [x] **Step 5: Verify build with `build_apk.ps1` and commit**
 
 Run: `powershell -ExecutionPolicy Bypass -File build_apk.ps1`
 Expected: `SUCCESS: OpenDisplay.apk created`
@@ -498,7 +498,7 @@ git commit -m "feat(android): implement usb accessory receiver and manifest inte
 - Consumes: `WinUsbTransport` from `server/transport/winusb_transport.py`
 - Produces: Integrated dual-transport support streaming GPU encoded frames to WinUSB bulk OUT if present, while concurrently serving TCP 7070.
 
-- [ ] **Step 1: Write unit test verifying dual-transport frame dispatch in `server/streamer.py`**
+- [x] **Step 1: Write unit test verifying dual-transport frame dispatch in `server/streamer.py`**
 
 ```python
 # In tests/test_streamer.py
@@ -511,12 +511,12 @@ def test_dual_transport_dispatch(self):
     mock_winusb.send_packet.assert_called_with(0x02, b"\x00\x00\x00\x01\x65")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m unittest tests/test_streamer.py`
 Expected: FAIL
 
-- [ ] **Step 3: Update `Streamer` and `OpenDisplayServer`**
+- [x] **Step 3: Update `Streamer` and `OpenDisplayServer`**
 
 In `server/streamer.py`:
 - Accept optional `winusb_transport`.
@@ -527,12 +527,12 @@ In `opendisplay_server.py`:
 - Initialize `WinUsbTransport()`.
 - Scan for WinUSB devices in `UsbMonitorThread`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m unittest discover -s tests`
 Expected: All 50+ tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/streamer.py opendisplay_server.py tests/test_streamer.py
@@ -547,19 +547,19 @@ git commit -m "feat(server): integrate dual-transport winusb bulk and tcp stream
 - Modify: `OpenDisplay_Setup.bat`
 - Test: Tablet live deployment & verification
 
-- [ ] **Step 1: Update `OpenDisplay_Setup.bat` with AOAP driver installation**
+- [x] **Step 1: Update `OpenDisplay_Setup.bat` with AOAP driver installation**
 
 Add step registering `opendisplay_aoap.inf` during setup if not already registered.
 
-- [ ] **Step 2: Compile fresh Windows binary & package release**
+- [x] **Step 2: Compile fresh Windows binary & package release**
 
 Run PyInstaller and build `OpenDisplay-v1.1.0-windows-x64.zip`.
 
-- [ ] **Step 3: Install APK on tablet and verify live connection**
+- [x] **Step 3: Install APK on tablet and verify live connection**
 
 Install `OpenDisplay.apk` onto Lenovo Tab M8 via ADB, verify app launch and decoding.
 
-- [ ] **Step 4: Final verification and commit**
+- [x] **Step 4: Final verification and commit**
 
 ```bash
 git commit -am "chore(release): package full aoap and winusb transport update"
