@@ -19,10 +19,14 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import win32api
 import win32con
 import win32gui
+import logging
 
 from server.capture.dxgi_capture import DxgiScreenCapture
 from server.encoder.hw_encoder import HardwareEncoder
 from server.streamer import Streamer
+from server.transport.winusb_transport import WinUsbTransport
+
+logger = logging.getLogger("OpenDisplay")
 
 # Enable Per-Monitor DPI Awareness v2 at earliest possible entry point
 try:
@@ -321,6 +325,19 @@ class USBMonitorThread(threading.Thread):
     def run(self):
         while self.server.is_running:
             try:
+                # Check high-speed WinUSB AOAP transport
+                if hasattr(self.server, 'winusb') and self.server.winusb:
+                    if not self.server.winusb.is_connected:
+                        devs = self.server.winusb.find_devices()
+                        if devs:
+                            self.server.winusb.open_device(devs[0])
+                            if self.server.winusb.is_connected:
+                                msg = "[OpenDisplay] Connected to tablet via high-speed WinUSB AOAP transport!"
+                                print(msg)
+                                logger.info(msg)
+                                if hasattr(self.server, 'tray') and self.server.tray:
+                                    self.server.tray.update_status(True)
+
                 adb = self.server.adb
                 connected = False
                 if adb and os.path.exists(adb):
@@ -351,6 +368,8 @@ class USBMonitorThread(threading.Thread):
                 pass
             time.sleep(2.0)
 
+UsbMonitorThread = USBMonitorThread
+
 class OpenDisplayServer:
     def __init__(self, port=PORT, display_idx=0, fps=60):
         self.port = port
@@ -359,6 +378,7 @@ class OpenDisplayServer:
         self.capture = DxgiScreenCapture(backend="auto")
         self.h264_encoder = HardwareEncoder(codec="auto", fps=fps, bitrate="6M")
         self.encoder = HardwareEncoder(codec="jpeg", fps=fps, quality=65)
+        self.winusb = WinUsbTransport()
         self.streamer = None
         self.streamer_7070 = None
         self.latest_frame_jpeg = None
@@ -405,6 +425,11 @@ class OpenDisplayServer:
         self.is_running = False
         with self.frame_condition:
             self.frame_condition.notify_all()
+        if hasattr(self, 'winusb') and self.winusb:
+            try:
+                self.winusb.close()
+            except Exception:
+                pass
         if self.streamer:
             try:
                 self.streamer.stop()
@@ -657,6 +682,7 @@ class OpenDisplayServer:
             capture=self.capture,
             encoder=self.h264_encoder,
             auto_forward=False,
+            winusb_transport=self.winusb,
         )
         self.streamer_7070 = self.streamer
         self.streamer.start_background()

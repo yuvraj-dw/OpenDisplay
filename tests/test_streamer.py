@@ -263,6 +263,83 @@ class TestStreamer(unittest.TestCase):
             streamer._handle_client(mock_sock)
             mock_handle.assert_not_called()
 
+    def test_dual_transport_dispatch(self):
+        mock_winusb = MagicMock()
+        mock_winusb.is_connected = True
+        streamer = Streamer(port=0, auto_forward=False, winusb_transport=mock_winusb)
+        streamer.broadcast_packet(0x02, b"\x00\x00\x00\x01\x65")
+        mock_winusb.send_packet.assert_called_with(0x02, b"\x00\x00\x00\x01\x65")
+
+    def test_dual_transport_dispatch_disconnected_winusb(self):
+        mock_winusb = MagicMock()
+        mock_winusb.is_connected = False
+        streamer = Streamer(port=0, auto_forward=False, winusb_transport=mock_winusb)
+        streamer.broadcast_packet(0x02, b"\x00\x00\x00\x01\x65")
+        mock_winusb.send_packet.assert_not_called()
+
+    def test_winusb_reader_loop_parses_touch_events(self):
+        mock_winusb = MagicMock()
+        mock_winusb.is_connected = True
+        mock_winusb.read_packet.side_effect = [
+            (0x04, b"m:down:0.25:0.75\n"),
+            (0x00, b"m:move:0.5:0.6\n"),
+            None,
+        ]
+
+        streamer = Streamer(port=0, auto_forward=False, winusb_transport=mock_winusb)
+        streamer.is_running = True
+
+        def stopper():
+            time.sleep(0.04)
+            streamer._stop_event.set()
+
+        threading.Thread(target=stopper, daemon=True).start()
+
+        with patch.object(streamer, 'handle_input_event') as mock_handle:
+            streamer._winusb_reader_loop()
+            mock_handle.assert_has_calls([
+                call('down', 0.25, 0.75),
+                call('move', 0.5, 0.6),
+            ])
+
+    def test_start_background_spawns_winusb_reader(self):
+        mock_winusb = MagicMock()
+        mock_winusb.is_connected = False
+        streamer = Streamer(port=0, auto_forward=False, winusb_transport=mock_winusb)
+
+        with patch.object(streamer, 'serve_forever'):
+            th = streamer.start_background()
+            self.assertIsNotNone(streamer._winusb_thread)
+            self.assertTrue(streamer._winusb_thread.is_alive())
+            streamer.stop()
+
+    def test_usb_monitor_thread_winusb_device_discovery(self):
+        from opendisplay_server import USBMonitorThread
+
+        mock_server = MagicMock()
+        mock_server.is_running = True
+        mock_server.adb = None
+        mock_winusb = MagicMock()
+        mock_winusb.is_connected = False
+        mock_winusb.find_devices.return_value = ["\\\\?\\usb#device_test"]
+        mock_server.winusb = mock_winusb
+
+        def side_effect_open(path):
+            mock_winusb.is_connected = True
+            mock_server.is_running = False
+            return True
+
+        mock_winusb.open_device.side_effect = side_effect_open
+
+        with patch('time.sleep'):
+            monitor = USBMonitorThread(mock_server)
+            monitor.run()
+
+        mock_winusb.find_devices.assert_called_once()
+        mock_winusb.open_device.assert_called_once_with("\\\\?\\usb#device_test")
+
+
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -12,6 +12,7 @@ from server.capture.dxgi_capture import DxgiScreenCapture
 from server.encoder.hw_encoder import HardwareEncoder
 from server.transport.adb_bridge import AdbBridge
 from server.transport.protocol import MSG_CONFIG, MSG_VIDEO, pack_message
+from server.transport.winusb_transport import WinUsbTransport
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +54,14 @@ class Streamer:
         capture: DxgiScreenCapture | None = None,
         encoder: HardwareEncoder | None = None,
         auto_forward: bool = True,
+        winusb_transport: WinUsbTransport | None = None,
     ):
         self.host = host
         self.port = port
         self.display_idx = display_idx
         self.fps = fps
         self.auto_forward = auto_forward
+        self.winusb_transport = winusb_transport
 
         self.adb_bridge = adb_bridge or AdbBridge()
         self.capture = capture or DxgiScreenCapture()
@@ -71,6 +74,7 @@ class Streamer:
         self._clients: list[socket.socket] = []
         self._clients_lock = threading.Lock()
         self._capture_thread: threading.Thread | None = None
+        self._winusb_thread: threading.Thread | None = None
 
     def setup_adb(self) -> bool:
         """Forward host port to device port using ADB."""
@@ -129,6 +133,17 @@ class Streamer:
         except Exception as e:
             logger.error(f"Error sending config handshake: {e}")
             return False
+
+    def broadcast_packet(self, msg_type: int, payload: bytes):
+        """Broadcasts a message to WinUSB transport (if connected) and all connected TCP clients."""
+        if self.winusb_transport and getattr(self.winusb_transport, 'is_connected', False):
+            try:
+                self.winusb_transport.send_packet(msg_type, payload)
+            except Exception as e:
+                logger.debug(f"Failed sending packet via WinUSB: {e}")
+
+        packet = pack_message(msg_type, payload)
+        self.broadcast(packet)
 
     def broadcast(self, packet: bytes):
         """Broadcasts a packet to all connected clients, removing dead connections."""
@@ -195,8 +210,7 @@ class Streamer:
             for chunk in chunks:
                 if not chunk:
                     continue
-                packet = pack_message(MSG_VIDEO, chunk)
-                self.broadcast(packet)
+                self.broadcast_packet(MSG_VIDEO, chunk)
 
             elapsed = time.perf_counter() - t0
             sleep_time = frame_interval - elapsed
@@ -398,6 +412,10 @@ class Streamer:
             self._capture_thread = threading.Thread(target=self.capture_and_stream, daemon=True)
             self._capture_thread.start()
 
+        if self.winusb_transport and (self._winusb_thread is None or not self._winusb_thread.is_alive()):
+            self._winusb_thread = threading.Thread(target=self._winusb_reader_loop, daemon=True)
+            self._winusb_thread.start()
+
         client_threads = []
         try:
             while not self._stop_event.is_set():
@@ -421,9 +439,59 @@ class Streamer:
         finally:
             self.stop()
 
+    def _winusb_reader_loop(self):
+        """Continuously reads input packets from WinUSB transport and dispatches touch events."""
+        while self.is_running and not self._stop_event.is_set():
+            if self.winusb_transport and getattr(self.winusb_transport, 'is_connected', False):
+                try:
+                    packet = self.winusb_transport.read_packet()
+                except Exception as e:
+                    logger.debug(f"Error reading WinUSB packet: {e}")
+                    packet = None
+
+                if packet:
+                    msg_type, payload = packet
+                    is_touch = (msg_type == 0x04)
+                    if isinstance(payload, (bytes, bytearray)):
+                        if payload.startswith(b'm:'):
+                            is_touch = True
+                    elif isinstance(payload, str) and payload.startswith('m:'):
+                        is_touch = True
+
+                    if is_touch:
+                        try:
+                            if isinstance(payload, (bytes, bytearray)):
+                                text = payload.decode('utf-8', errors='ignore')
+                            else:
+                                text = str(payload)
+                            for line in text.strip().split('\n'):
+                                line = line.strip()
+                                if line.startswith('m:'):
+                                    parts = line.split(':')
+                                    if len(parts) == 4:
+                                        action = parts[1].strip()
+                                        normX = float(parts[2].strip())
+                                        normY = float(parts[3].strip())
+                                        self.handle_input_event(action, normX, normY)
+                                elif len(line.split(':')) == 3 and msg_type == 0x04:
+                                    parts = line.split(':')
+                                    action = parts[0].strip()
+                                    normX = float(parts[1].strip())
+                                    normY = float(parts[2].strip())
+                                    self.handle_input_event(action, normX, normY)
+                        except Exception as e:
+                            logger.debug(f"Error handling WinUSB input event: {e}")
+                else:
+                    time.sleep(0.005)
+            else:
+                time.sleep(0.005)
+
     def start_background(self) -> threading.Thread:
         """Start the server in a background daemon thread."""
         self.start_server()
+        if self.winusb_transport and (self._winusb_thread is None or not self._winusb_thread.is_alive()):
+            self._winusb_thread = threading.Thread(target=self._winusb_reader_loop, daemon=True)
+            self._winusb_thread.start()
         thread = threading.Thread(target=self.serve_forever, daemon=True)
         thread.start()
         return thread
