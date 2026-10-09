@@ -1,7 +1,11 @@
 package com.display.usbclient;
 
 import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.hardware.usb.UsbAccessory;
+import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -14,14 +18,14 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements StreamReceiver.StreamListener {
     private static final String TAG = "MainActivity";
     private static final String STREAM_HOST = "127.0.0.1";
     private static final int STREAM_PORT = 7070;
 
     private SurfaceView surfaceView;
     private H264Decoder decoder;
-    private StreamReceiver receiver;
+    private StreamReceiver streamReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,37 +42,7 @@ public class MainActivity extends Activity {
                 stopPipeline();
                 try {
                     decoder = new H264Decoder(holder.getSurface(), 1280, 800);
-                    receiver = new StreamReceiver(decoder, STREAM_HOST, STREAM_PORT, 1000L, new StreamReceiver.Listener() {
-                        @Override
-                        public void onConnected() {
-                            Log.i(TAG, "StreamReceiver connected to " + STREAM_HOST + ":" + STREAM_PORT);
-                        }
-
-                        @Override
-                        public void onDisconnected() {
-                            Log.i(TAG, "StreamReceiver disconnected");
-                        }
-
-                        @Override
-                        public void onConfigReceived(int width, int height, int fps) {
-                            Log.i(TAG, "Config received: " + width + "x" + height + " @" + fps + "fps");
-                            if (decoder != null && surfaceView != null) {
-                                Surface surface = surfaceView.getHolder().getSurface();
-                                if (surface != null && surface.isValid()) {
-                                    decoder.configure(surface, width, height);
-                                }
-                            }
-                        }
-
-                        @Override
-                        public void onVideoFrame(byte[] payload) {
-                        }
-
-                        @Override
-                        public void onImageFrame(byte[] payload) {
-                        }
-                    });
-                    receiver.start();
+                    initReceiver();
                 } catch (Exception e) {
                     Log.e(TAG, "Failed initializing decoder or receiver: " + e.getMessage(), e);
                 }
@@ -98,7 +72,7 @@ public class MainActivity extends Activity {
                 float normX = Math.max(0.0f, Math.min(1.0f, event.getX() / (float) width));
                 float normY = Math.max(0.0f, Math.min(1.0f, event.getY() / (float) height));
 
-                StreamReceiver currentReceiver = receiver;
+                StreamReceiver currentReceiver = streamReceiver;
                 int action = event.getActionMasked();
                 switch (action) {
                     case MotionEvent.ACTION_DOWN:
@@ -127,6 +101,81 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && UsbManager.ACTION_USB_ACCESSORY_ATTACHED.equals(intent.getAction())) {
+            Log.i(TAG, "USB_ACCESSORY_ATTACHED intent received in onNewIntent");
+            initReceiver();
+        }
+    }
+
+    private synchronized void initReceiver() {
+        if (streamReceiver != null) {
+            try {
+                streamReceiver.stopReceiver();
+            } catch (Exception e) {
+                Log.w(TAG, "Error stopping existing receiver: " + e.getMessage());
+            }
+            streamReceiver = null;
+        }
+
+        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        UsbAccessory accessory = getIntent() != null ? (UsbAccessory) getIntent().getParcelableExtra(UsbManager.EXTRA_ACCESSORY) : null;
+        if (accessory == null && usbManager != null) {
+            UsbAccessory[] list = usbManager.getAccessoryList();
+            if (list != null && list.length > 0) {
+                accessory = list[0];
+            }
+        }
+
+        if (accessory != null) {
+            Log.i(TAG, "Opening StreamReceiver in AOAP Accessory mode");
+            streamReceiver = new StreamReceiver(accessory, this, this);
+        } else {
+            Log.i(TAG, "Opening StreamReceiver in TCP mode (127.0.0.1:7070)");
+            streamReceiver = new StreamReceiver(STREAM_HOST, STREAM_PORT, this);
+        }
+
+        if (decoder != null) {
+            streamReceiver.setDecoder(decoder);
+        }
+        streamReceiver.start();
+    }
+
+    @Override
+    public void onConnected() {
+        Log.i(TAG, "StreamReceiver connected");
+    }
+
+    @Override
+    public void onDisconnected() {
+        Log.i(TAG, "StreamReceiver disconnected");
+    }
+
+    @Override
+    public void onConfigReceived(int width, int height, int fps) {
+        Log.i(TAG, "Config received: " + width + "x" + height + " @" + fps + "fps");
+        if (decoder != null && surfaceView != null) {
+            Surface surface = surfaceView.getHolder().getSurface();
+            if (surface != null && surface.isValid()) {
+                decoder.configure(surface, width, height);
+            }
+        }
+    }
+
+    @Override
+    public void onVideoFrame(byte[] payload) {
+        if (decoder != null && (streamReceiver == null || streamReceiver.getDecoder() == null)) {
+            decoder.decodeFrame(payload, 0, payload.length, 0);
+        }
+    }
+
+    @Override
+    public void onImageFrame(byte[] payload) {
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         enableFullscreenImmersive();
@@ -147,13 +196,13 @@ public class MainActivity extends Activity {
     }
 
     private synchronized void stopPipeline() {
-        if (receiver != null) {
+        if (streamReceiver != null) {
             try {
-                receiver.stopReceiver();
+                streamReceiver.stopReceiver();
             } catch (Exception e) {
                 Log.w(TAG, "Error stopping receiver: " + e.getMessage());
             }
-            receiver = null;
+            streamReceiver = null;
         }
 
         if (decoder != null) {
