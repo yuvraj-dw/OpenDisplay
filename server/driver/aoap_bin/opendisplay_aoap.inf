@@ -1,0 +1,46 @@
+;
+; opendisplay_aoap.inf
+; OpenDisplay AOAP WinUSB Driver
+;
+
+[Version]
+Signature = "$Windows NT$"
+Class     = USBDevice
+ClassGUID = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider  = %ManufacturerName%
+DriverVer = 10/09/2026,1.1.0.0
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%DeviceName% = USB_Install,USB\VID_18D1&PID_2D00
+%DeviceName% = USB_Install,USB\VID_18D1&PID_2D01,USB\VID_18D1&PID_2D01&MI_00
+
+[USB_Install]
+Include=winusb.inf
+Needs=WINUSB.NT
+
+[USB_Install.Services]
+Include=winusb.inf
+AddService=WinUsb,0x00000002,WinUsb_ServiceInstall
+
+[WinUsb_ServiceInstall]
+DisplayName     = %WinUsb_SvcDesc%
+ServiceType     = 1
+StartType       = 3
+ErrorControl    = 1
+ServiceBinary   = %12%\WinUSB.sys
+
+[USB_Install.HW]
+AddReg=Dev_AddReg
+
+[Dev_AddReg]
+HKR,,DeviceInterfaceGUIDs,0x10000,%GUID_DEVINTERFACE_AOAP%
+
+[Strings]
+ManufacturerName="OpenDisplay Project"
+ClassName="Universal Serial Bus devices"
+WinUsb_SvcDesc="OpenDisplay WinUSB Service"
+DeviceName="OpenDisplay Android Accessory Interface"
+GUID_DEVINTERFACE_AOAP="{E1D13C8D-9B21-4E87-873B-15BC9C21A77E}"
