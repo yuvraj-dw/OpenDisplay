@@ -8,6 +8,24 @@ logger = logging.getLogger("OpenDisplay.WinUSB")
 
 OPENDISPLAY_AOAP_GUID = "{E1D13C8D-9B21-4E87-873B-15BC9C21A77E}"
 
+# Pipe policy constants
+PIPE_TRANSFER_TIMEOUT = 0x03
+RAW_IO = 0x07
+
+# Windows error constants
+ERROR_INVALID_HANDLE = 6
+ERROR_GEN_FAILURE = 31
+ERROR_SEM_TIMEOUT = 121
+ERROR_OPERATION_ABORTED = 995
+ERROR_DEVICE_NOT_CONNECTED = 1167
+
+DISCONNECT_ERRORS = (
+    ERROR_DEVICE_NOT_CONNECTED,
+    ERROR_GEN_FAILURE,
+    ERROR_INVALID_HANDLE,
+    ERROR_OPERATION_ABORTED,
+)
+
 
 class GUID(ctypes.Structure):
     _fields_ = [
@@ -98,6 +116,11 @@ class WinUsbTransport:
                     ctypes.c_void_p, ctypes.c_ubyte, ctypes.c_void_p,
                     wintypes.ULONG, ctypes.POINTER(wintypes.ULONG), ctypes.c_void_p
                 ]
+                self._winusb.WinUsb_SetPipePolicy.restype = wintypes.BOOL
+                self._winusb.WinUsb_SetPipePolicy.argtypes = [
+                    ctypes.c_void_p, ctypes.c_ubyte, wintypes.ULONG,
+                    wintypes.ULONG, ctypes.c_void_p
+                ]
             except Exception as e:
                 logger.warning(f"Failed to load WinUSB DLLs: {e}")
 
@@ -186,8 +209,40 @@ class WinUsbTransport:
 
         self.winusb_handle = h_winusb
         self.is_connected = True
+
+        # Configure WinUSB pipe policies
+        try:
+            timeout = wintypes.ULONG(1000)
+            self._winusb.WinUsb_SetPipePolicy(
+                self.winusb_handle,
+                ctypes.c_ubyte(self.in_pipe),
+                PIPE_TRANSFER_TIMEOUT,
+                ctypes.sizeof(timeout),
+                ctypes.byref(timeout)
+            )
+            raw_io = ctypes.c_ubyte(1)
+            self._winusb.WinUsb_SetPipePolicy(
+                self.winusb_handle,
+                ctypes.c_ubyte(self.out_pipe),
+                RAW_IO,
+                ctypes.sizeof(raw_io),
+                ctypes.byref(raw_io)
+            )
+        except Exception as e:
+            logger.warning(f"Failed to set WinUSB pipe policies: {e}")
+
         logger.info(f"WinUSB device opened successfully: {path}")
         return True
+
+    def _get_last_error(self) -> int:
+        try:
+            if self._kernel32 and hasattr(self._kernel32, 'GetLastError'):
+                return int(self._kernel32.GetLastError())
+            if os.name == 'nt' and hasattr(ctypes, 'windll') and hasattr(ctypes.windll, 'kernel32'):
+                return int(ctypes.windll.kernel32.GetLastError())
+        except Exception:
+            pass
+        return 0
 
     def send_packet(self, msg_type: int, payload: bytes) -> bool:
         if not self.is_connected or not self.winusb_handle or not self._winusb:
@@ -202,7 +257,13 @@ class WinUsbTransport:
             ctypes.byref(written),
             None
         )
-        return bool(res and written.value == len(data))
+        if not res or written.value != len(data):
+            err = self._get_last_error()
+            if err in DISCONNECT_ERRORS:
+                logger.warning(f"WinUSB write failed (error {err}): device disconnected. Closing transport.")
+                self.close()
+            return False
+        return True
 
     def read_packet(self, timeout_ms: int = 1000) -> tuple[int, bytes] | None:
         if not self.is_connected or not self.winusb_handle or not self._winusb:
@@ -217,11 +278,24 @@ class WinUsbTransport:
             ctypes.byref(transferred),
             None
         )
-        if res and transferred.value >= 5:
-            try:
-                return self.unframe_packet(buf.raw[:transferred.value])
-            except ValueError:
+        if not res:
+            err = self._get_last_error()
+            if err == ERROR_SEM_TIMEOUT:
                 return None
+            if err in DISCONNECT_ERRORS:
+                logger.warning(f"WinUSB read failed (error {err}): device disconnected. Closing transport.")
+                self.close()
+            return None
+
+        if transferred.value > 0:
+            raw_data = buf.raw[:transferred.value]
+            if raw_data.startswith(b"m:"):
+                return 0x04, raw_data
+            if transferred.value >= 5:
+                try:
+                    return self.unframe_packet(raw_data)
+                except ValueError:
+                    return None
         return None
 
     def switch_aoap(self, vendor_id: int = 0, product_id: int = 0) -> bool:

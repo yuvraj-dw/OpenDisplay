@@ -337,6 +337,7 @@ class TestStreamer(unittest.TestCase):
 
         mock_winusb.find_devices.assert_called_once()
         mock_winusb.open_device.assert_called_once_with("\\\\?\\usb#device_test")
+        mock_winusb.send_packet.assert_called_once_with(1, b'{"width": 1280, "height": 800, "fps": 60}')
 
 
 

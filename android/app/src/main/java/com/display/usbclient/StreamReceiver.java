@@ -268,11 +268,20 @@ public class StreamReceiver extends Thread {
                     public void run() {
                         synchronized (outputLock) {
                             try {
-                                byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
                                 if (fileOutputStream != null) {
-                                    fileOutputStream.write(bytes);
+                                    byte[] rawPayload = message.getBytes(StandardCharsets.UTF_8);
+                                    int totalLen = 1 + rawPayload.length;
+                                    byte[] packet = new byte[4 + totalLen];
+                                    packet[0] = (byte)((totalLen >>> 24) & 0xFF);
+                                    packet[1] = (byte)((totalLen >>> 16) & 0xFF);
+                                    packet[2] = (byte)((totalLen >>> 8) & 0xFF);
+                                    packet[3] = (byte)(totalLen & 0xFF);
+                                    packet[4] = 0x04; // MSG_INPUT
+                                    System.arraycopy(rawPayload, 0, packet, 5, rawPayload.length);
+                                    fileOutputStream.write(packet);
                                     fileOutputStream.flush();
                                 } else if (activeOutputStream != null) {
+                                    byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
                                     activeOutputStream.write(bytes);
                                     activeOutputStream.flush();
                                 }

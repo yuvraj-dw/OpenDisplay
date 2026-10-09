@@ -13,6 +13,7 @@ import base64
 import hashlib
 import struct
 import select
+import json
 import numpy as np
 from ctypes import wintypes
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -335,6 +336,11 @@ class USBMonitorThread(threading.Thread):
                                 msg = "[OpenDisplay] Connected to tablet via high-speed WinUSB AOAP transport!"
                                 print(msg)
                                 logger.info(msg)
+                                enable_virtual_display()
+                                fps = getattr(self.server, 'fps', 60)
+                                fps_val = fps if isinstance(fps, (int, float)) else 60
+                                config_payload = json.dumps({"width": 1280, "height": 800, "fps": fps_val}).encode('utf-8')
+                                self.server.winusb.send_packet(1, config_payload)  # MSG_CONFIG = 1
                                 if hasattr(self.server, 'tray') and self.server.tray:
                                     self.server.tray.update_status(True)
 
