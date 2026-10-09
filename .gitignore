@@ -30,6 +30,8 @@ venv/
 env/
 *.log
 tablet_screen.png
+tablet_native_live.png
+.superpowers/
 docs/*
 !docs/superpowers/
 release_staging/
