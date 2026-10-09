@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from server.transport.adb_bridge import AdbBridge
+from server.transport.adb_bridge import AdbBridge, CREATE_NO_WINDOW
 
 
 class TestAdbBridge(unittest.TestCase):
@@ -21,7 +21,12 @@ class TestAdbBridge(unittest.TestCase):
         )
         bridge = AdbBridge('adb')
         self.assertTrue(bridge.is_device_connected())
-        mock_run.assert_called_once_with(['adb', 'devices'], capture_output=True, text=True)
+        mock_run.assert_called_once_with(
+            ['adb', 'devices'],
+            capture_output=True,
+            text=True,
+            creationflags=CREATE_NO_WINDOW
+        )
 
     @patch('subprocess.run')
     def test_is_device_connected_false_when_unauthorized(self, mock_run):
@@ -49,7 +54,8 @@ class TestAdbBridge(unittest.TestCase):
         mock_run.assert_called_once_with(
             ['adb', 'forward', 'tcp:7070', 'tcp:7070'],
             capture_output=True,
-            text=True
+            text=True,
+            creationflags=CREATE_NO_WINDOW
         )
 
     @patch('subprocess.run')
