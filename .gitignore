@@ -30,7 +30,7 @@ venv/
 env/
 *.log
 tablet_screen.png
-docs/
+docs/*
 !docs/superpowers/
 release_staging/
 *.zip
