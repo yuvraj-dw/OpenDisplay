@@ -2,6 +2,7 @@ import argparse
 import ctypes
 import json
 import logging
+import os
 import select
 import socket
 import sys
@@ -144,6 +145,11 @@ class Streamer:
             except Exception as e:
                 logger.debug(f"Failed sending packet via WinUSB: {e}")
 
+        # ponytail: avoid pack_message allocation if no TCP clients connected
+        with self._clients_lock:
+            if not self._clients:
+                return
+
         packet = pack_message(msg_type, payload)
         self.broadcast(packet)
 
@@ -171,59 +177,73 @@ class Streamer:
         """
         frame_interval = 1.0 / self.fps
 
-        while self.is_running and not self._stop_event.is_set():
-            t0 = time.perf_counter()
-
-            displays = []
-            if hasattr(self.capture, 'list_displays'):
-                try:
-                    displays = self.capture.list_displays() or []
-                except Exception as e:
-                    logger.debug(f"Error checking displays: {e}")
-
-            if not displays:
-                time.sleep(0.02)
-                continue
-
-            idx = self.display_idx
-            if idx >= len(displays):
-                idx = len(displays) - 1
-            if idx < 0:
-                idx = 0
-
+        # ponytail: request 1ms timer resolution on Windows to eliminate 15.6ms sleep jitter
+        if os.name == 'nt':
             try:
-                frame = self.capture.capture_frame(display_idx=idx)
-            except Exception as e:
-                logger.debug(f"Error capturing frame: {e}")
-                frame = None
+                ctypes.windll.winmm.timeBeginPeriod(1)
+            except Exception:
+                pass
 
-            if frame is None:
-                time.sleep(0.005)
-                continue
+        try:
+            while self.is_running and not self._stop_event.is_set():
+                t0 = time.perf_counter()
 
-            if hasattr(self, 'on_frame_captured') and callable(self.on_frame_captured):
+                displays = []
+                if hasattr(self.capture, 'list_displays'):
+                    try:
+                        displays = self.capture.list_displays() or []
+                    except Exception as e:
+                        logger.debug(f"Error checking displays: {e}")
+
+                if not displays:
+                    time.sleep(0.02)
+                    continue
+
+                idx = self.display_idx
+                if idx >= len(displays):
+                    idx = len(displays) - 1
+                if idx < 0:
+                    idx = 0
+
                 try:
-                    self.on_frame_captured(frame)
+                    frame = self.capture.capture_frame(display_idx=idx)
+                except Exception as e:
+                    logger.debug(f"Error capturing frame: {e}")
+                    frame = None
+
+                if frame is None:
+                    time.sleep(0.005)
+                    continue
+
+                if hasattr(self, 'on_frame_captured') and callable(self.on_frame_captured):
+                    try:
+                        self.on_frame_captured(frame)
+                    except Exception:
+                        pass
+
+                chunks = _get_encoded_chunks(self.encoder, frame)
+                if isinstance(chunks, (bytes, bytearray)):
+                    chunks = [chunks] if chunks else []
+                elif chunks is None:
+                    chunks = []
+                else:
+                    chunks = list(chunks)
+
+                for chunk in chunks:
+                    if not chunk:
+                        continue
+                    self.broadcast_packet(MSG_VIDEO, chunk)
+
+                elapsed = time.perf_counter() - t0
+                sleep_time = frame_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+        finally:
+            if os.name == 'nt':
+                try:
+                    ctypes.windll.winmm.timeEndPeriod(1)
                 except Exception:
                     pass
-
-            chunks = _get_encoded_chunks(self.encoder, frame)
-            if isinstance(chunks, (bytes, bytearray)):
-                chunks = [chunks] if chunks else []
-            elif chunks is None:
-                chunks = []
-            else:
-                chunks = list(chunks)
-
-            for chunk in chunks:
-                if not chunk:
-                    continue
-                self.broadcast_packet(MSG_VIDEO, chunk)
-
-            elapsed = time.perf_counter() - t0
-            sleep_time = frame_interval - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
 
     def send_single_frame(self, client_sock: socket.socket) -> bool:
         """Capture one frame, encode it, and send it packaged as MSG_VIDEO."""

@@ -122,7 +122,9 @@ public class H264Decoder {
                         int flags = 0;
                         boolean hasSlice = false;
                         boolean hasConfig = false;
-                        for (int i = offset; i < offset + length - 4; i++) {
+                        // ponytail: NAL headers are at packet start; scan at most first 128 bytes
+                        int scanLimit = Math.min(offset + length - 4, offset + 128);
+                        for (int i = offset; i < scanLimit; i++) {
                             if (data[i] == 0 && data[i + 1] == 0 && (data[i + 2] == 1 || (data[i + 2] == 0 && data[i + 3] == 1))) {
                                 int headerIdx = (data[i + 2] == 1) ? (i + 3) : (i + 4);
                                 int nalType = data[headerIdx] & 0x1F;
