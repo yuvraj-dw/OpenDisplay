@@ -154,10 +154,6 @@ class HardwareEncoder:
                 'zerolatency',
                 '-profile:v',
                 'baseline',
-                '-level',
-                '3.1',
-                '-refs',
-                '1',
                 '-bf',
                 '0',
                 '-b:v',
@@ -181,10 +177,6 @@ class HardwareEncoder:
                 'ull',
                 '-profile:v',
                 'baseline',
-                '-level',
-                '3.1',
-                '-refs',
-                '1',
                 '-zerolatency',
                 '1',
                 '-delay',
@@ -337,11 +329,10 @@ class HardwareEncoder:
             if chunks:
                 return b''.join(chunks)
 
-            # If no packet came out (e.g. initial buffer), return empty or fallback
-            return self.encode_image(frame, format='jpeg', quality=self.quality)
+            return b''
         except Exception as e:
-            logger.warning(f"Video frame encode error: {e}, falling back to JPEG")
-            return self.encode_image(frame, format='jpeg', quality=self.quality)
+            logger.warning(f"Video frame encode error: {e}")
+            return b''
 
     def encode_frame(self, frame: np.ndarray) -> list[bytes]:
         """Encode a frame and return a list of complete packets / NAL units."""

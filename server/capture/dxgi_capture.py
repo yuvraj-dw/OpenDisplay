@@ -321,6 +321,8 @@ class DxgiScreenCapture:
         Returns a numpy array of shape (H, W, 3) in BGR format.
         """
         displays = self.list_displays()
+        if displays and display_idx >= len(displays):
+            displays = self.list_displays(force_refresh=True)
         if display_idx < 0 or (displays and display_idx >= len(displays)):
             raise IndexError(f"Display index {display_idx} out of range (total {len(displays)})")
 
@@ -486,13 +488,20 @@ class DxgiScreenCapture:
                 self._dxcam_camera = None
 
             self._dxcam_camera = dxcam.create(device_idx=dev_idx, output_idx=out_idx)
-            if self._dxcam_camera:
-                self._dxcam_camera.start(target_fps=60, video_mode=True)
+            if self._dxcam_camera and not getattr(self._dxcam_camera, 'is_capturing', False):
+                try:
+                    self._dxcam_camera.start(target_fps=60, video_mode=True)
+                except Exception as e:
+                    logger.debug(f"dxcam start notice: {e}")
             self._dxcam_current_target = target
             self._dxcam_idx = display_idx
 
         if self._dxcam_camera:
-            frame = self._dxcam_camera.get_latest_frame()
+            try:
+                frame = self._dxcam_camera.get_latest_frame()
+            except Exception as e:
+                logger.debug(f"get_latest_frame error: {e}")
+                frame = None
             if frame is not None:
                 if frame.shape[2] == 4:
                     return frame[:, :, :3]

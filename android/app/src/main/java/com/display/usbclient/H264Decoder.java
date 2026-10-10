@@ -21,6 +21,8 @@ public class H264Decoder {
     private final Object lock = new Object();
     private volatile boolean isConfigured = false;
     private volatile boolean isReleased = false;
+    private volatile boolean isRunning = false;
+    private Thread outputThread;
 
     public H264Decoder(Surface surface, int width, int height) {
         this.surface = surface;
@@ -87,6 +89,14 @@ public class H264Decoder {
 
             this.codec = decoder;
             this.isConfigured = true;
+            this.isRunning = true;
+            this.outputThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    runOutputLoop();
+                }
+            }, "H264DecoderOutputThread");
+            this.outputThread.start();
             Log.i(TAG, "H264 decoder initialized successfully: " + w + "x" + h);
         } catch (IOException e) {
             Log.e(TAG, "Failed to create H264 decoder: " + e.getMessage(), e);
@@ -101,9 +111,6 @@ public class H264Decoder {
         synchronized (lock) {
             if (!isConfigured || isReleased || codec == null) return;
             try {
-                // Drain any previously ready output buffers to minimize frame pipeline latency
-                drainOutput(codec);
-
                 int inputIndex = codec.dequeueInputBuffer(DEFAULT_TIMEOUT_US);
                 if (inputIndex >= 0) {
                     ByteBuffer inputBuffer = codec.getInputBuffer(inputIndex);
@@ -136,7 +143,6 @@ public class H264Decoder {
                 } else {
                     Log.w(TAG, "Input buffer dequeue timed out, dropping frame slice");
                 }
-                drainOutput(codec);
             } catch (IllegalStateException e) {
                 Log.e(TAG, "MediaCodec invalid state: " + e.getMessage(), e);
                 try {
@@ -158,20 +164,40 @@ public class H264Decoder {
         decodeFrame(data, 0, data.length, 0);
     }
 
-    private void drainOutput(MediaCodec activeCodec) {
-        while (true) {
-            int outputIndex = activeCodec.dequeueOutputBuffer(bufferInfo, 0);
-            if (outputIndex >= 0) {
-                activeCodec.releaseOutputBuffer(outputIndex, true);
-            } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                Log.i(TAG, "MediaCodec output format changed: " + activeCodec.getOutputFormat());
-            } else {
+    private void runOutputLoop() {
+        MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        while (isRunning && !isReleased) {
+            MediaCodec activeCodec = this.codec;
+            if (activeCodec == null || !isConfigured) {
+                try {
+                    Thread.sleep(5);
+                } catch (InterruptedException e) {
+                    break;
+                }
+                continue;
+            }
+            try {
+                int outputIndex = activeCodec.dequeueOutputBuffer(info, 10000);
+                if (outputIndex >= 0) {
+                    activeCodec.releaseOutputBuffer(outputIndex, true);
+                } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    Log.i(TAG, "MediaCodec output format changed: " + activeCodec.getOutputFormat());
+                }
+            } catch (IllegalStateException e) {
                 break;
+            } catch (Exception e) {
+                Log.w(TAG, "Output loop notice: " + e.getMessage());
             }
         }
     }
 
     private void stopAndReleaseCodecInternal() {
+        isRunning = false;
+        if (outputThread != null) {
+            try { outputThread.interrupt(); } catch (Exception ignored) {}
+            try { outputThread.join(200); } catch (Exception ignored) {}
+            outputThread = null;
+        }
         if (codec != null) {
             try { codec.stop(); } catch (Exception ignored) {}
             try { codec.release(); } catch (Exception ignored) {}

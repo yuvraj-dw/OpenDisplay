@@ -87,6 +87,8 @@ class Streamer:
 
     def start_server(self) -> socket.socket:
         """Create and bind the TCP server socket with TCP_NODELAY enabled."""
+        self.is_running = True
+        self._stop_event.clear()
         if self._server_socket is not None:
             return self._server_socket
 
@@ -198,6 +200,12 @@ class Streamer:
             if frame is None:
                 time.sleep(0.005)
                 continue
+
+            if hasattr(self, 'on_frame_captured') and callable(self.on_frame_captured):
+                try:
+                    self.on_frame_captured(frame)
+                except Exception:
+                    pass
 
             chunks = _get_encoded_chunks(self.encoder, frame)
             if isinstance(chunks, (bytes, bytearray)):
@@ -402,6 +410,8 @@ class Streamer:
 
     def serve_forever(self, max_clients: int | None = None):
         """Main server loop: accepts clients and streams frames."""
+        self.is_running = True
+        self._stop_event.clear()
         if self.auto_forward:
             self.setup_adb()
 
@@ -488,7 +498,12 @@ class Streamer:
 
     def start_background(self) -> threading.Thread:
         """Start the server in a background daemon thread."""
+        self.is_running = True
+        self._stop_event.clear()
         self.start_server()
+        if self._capture_thread is None or not self._capture_thread.is_alive():
+            self._capture_thread = threading.Thread(target=self.capture_and_stream, daemon=True)
+            self._capture_thread.start()
         if self.winusb_transport and (self._winusb_thread is None or not self._winusb_thread.is_alive()):
             self._winusb_thread = threading.Thread(target=self._winusb_reader_loop, daemon=True)
             self._winusb_thread.start()

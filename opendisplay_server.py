@@ -533,7 +533,13 @@ class OpenDisplayServer:
 
         while self.is_running:
             t0 = time.perf_counter()
-            frame = self.capture.capture_frame(display_idx=self.display_idx)
+            try:
+                frame = self.capture.capture_frame(display_idx=self.display_idx)
+            except IndexError:
+                try:
+                    frame = self.capture.capture_frame(display_idx=0)
+                except Exception:
+                    frame = None
             if frame is not None:
                 now = time.perf_counter()
                 # Fast 16x downsampled grid check (0.03ms): don't re-encode identical static screens
@@ -563,19 +569,47 @@ class OpenDisplayServer:
         # Start tray icon
         self.tray = SystemTray(self)
 
+        # Start native binary streamer on tcp:7070 as the sole DXCAM owner
+        self.streamer = Streamer(
+            host="0.0.0.0",
+            port=STREAM_PORT,
+            display_idx=self.display_idx,
+            fps=self.fps,
+            capture=self.capture,
+            encoder=self.h264_encoder,
+            auto_forward=False,
+            winusb_transport=self.winusb,
+        )
+        self.streamer_7070 = self.streamer
+
+        def _on_frame(f):
+            with self.frame_condition:
+                self.latest_frame = f
+                self.latest_frame_jpeg = None
+                self.frame_id += 1
+                self.frame_condition.notify_all()
+        self.streamer.on_frame_captured = _on_frame
+        self.streamer.start_background()
+
         # Start USB plug/unplug watcher
         usb_watcher = USBMonitorThread(self)
         usb_watcher.start()
-
-        # Start screen capture thread
-        cap_thread = threading.Thread(target=self.capture_loop, daemon=True)
-        cap_thread.start()
 
         server_instance = self
 
         class StreamHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
                 pass
+
+            def _get_jpeg(self):
+                if server_instance.latest_frame_jpeg is None and getattr(server_instance, 'latest_frame', None) is not None:
+                    try:
+                        server_instance.latest_frame_jpeg = server_instance.encoder.encode_image(
+                            server_instance.latest_frame, format="jpeg", quality=65
+                        )
+                    except Exception:
+                        pass
+                return server_instance.latest_frame_jpeg
 
             def handle_websocket(self):
                 key = self.headers.get("Sec-WebSocket-Key")
@@ -656,9 +690,9 @@ class OpenDisplayServer:
                         with server_instance.frame_condition:
                             if server_instance.frame_id == last_sent_id:
                                 server_instance.frame_condition.wait(timeout=0.03)
-                            if server_instance.frame_id != last_sent_id:
-                                frame_data = server_instance.latest_frame_jpeg
-                                last_sent_id = server_instance.frame_id
+                        if server_instance.frame_id != last_sent_id:
+                            frame_data = self._get_jpeg()
+                            last_sent_id = server_instance.frame_id
 
                         if frame_data:
                             send_ws_binary(frame_data)
@@ -697,7 +731,7 @@ class OpenDisplayServer:
                                 if server_instance.frame_id == last_id:
                                     server_instance.frame_condition.wait(timeout=0.04)
                                 if server_instance.frame_id != last_id:
-                                    frame_data = server_instance.latest_frame_jpeg
+                                    frame_data = self._get_jpeg()
                                     last_id = server_instance.frame_id
 
                             if frame_data is not None:
@@ -751,20 +785,6 @@ class OpenDisplayServer:
 
         self.httpd = ThreadingHTTPServer(("0.0.0.0", self.port), StreamHandler)
         print(f"[OpenDisplay] Running in background and System Tray (http://127.0.0.1:{self.port})")
-
-        # Start native binary streamer on tcp:7070
-        self.streamer = Streamer(
-            host="0.0.0.0",
-            port=STREAM_PORT,
-            display_idx=self.display_idx,
-            fps=self.fps,
-            capture=self.capture,
-            encoder=self.h264_encoder,
-            auto_forward=False,
-            winusb_transport=self.winusb,
-        )
-        self.streamer_7070 = self.streamer
-        self.streamer.start_background()
 
         try:
             self.httpd.serve_forever()
