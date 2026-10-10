@@ -96,6 +96,92 @@ def _run_devcon(action):
         print(f"[OpenDisplay] Devcon {action} error: {e}")
         return False
 
+def detach_virtual_display():
+    """Detaches the virtual display from the Windows desktop cleanly without UAC."""
+    try:
+        detached = False
+        for i in range(40):
+            try:
+                dev = win32api.EnumDisplayDevices(None, i, 0)
+                if (dev.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) and not (dev.StateFlags & win32con.DISPLAY_DEVICE_PRIMARY_DEVICE):
+                    if any(k in dev.DeviceString for k in ["Virtual", "LuminonCore", "IDDCX", "OpenDisplay"]):
+                        try:
+                            dm = win32api.EnumDisplaySettings(dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
+                        except Exception:
+                            dm = win32api.EnumDisplaySettings(dev.DeviceName, 0)
+                        dm.PelsWidth = 0
+                        dm.PelsHeight = 0
+                        dm.Fields = win32con.DM_PELSWIDTH | win32con.DM_PELSHEIGHT | win32con.DM_POSITION
+                        win32api.ChangeDisplaySettingsEx(dev.DeviceName, dm, win32con.CDS_UPDATEREGISTRY | win32con.CDS_NORESET)
+                        detached = True
+            except Exception:
+                pass
+        if detached:
+            win32api.ChangeDisplaySettingsEx(None, None, 0)
+            print("[OpenDisplay] Detached virtual display from Windows desktop.")
+    except Exception as e:
+        print(f"[OpenDisplay] Detach notice: {e}")
+
+def attach_virtual_display(width=1280, height=800, refresh_rate=165):
+    """Attaches and positions the virtual display without requiring UAC/admin."""
+    try:
+        primary_height = 1080
+        for i in range(40):
+            try:
+                dev = win32api.EnumDisplayDevices(None, i, 0)
+                if (dev.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) and (dev.StateFlags & win32con.DISPLAY_DEVICE_PRIMARY_DEVICE):
+                    dm = win32api.EnumDisplaySettings(dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
+                    primary_height = dm.PelsHeight
+                    break
+            except Exception:
+                pass
+
+        target_x = -width
+        target_y = primary_height - height
+        target_dev = None
+
+        # Look specifically for "Virtual Display Driver" first
+        for i in range(40):
+            try:
+                dev = win32api.EnumDisplayDevices(None, i, 0)
+                if "Virtual Display Driver" in dev.DeviceString:
+                    target_dev = dev
+                    break
+            except Exception:
+                pass
+
+        # Fallback to any LuminonCore / IDDCX adapter
+        if not target_dev:
+            for i in range(40):
+                try:
+                    dev = win32api.EnumDisplayDevices(None, i, 0)
+                    if any(k in dev.DeviceString for k in ["Virtual", "LuminonCore", "IDDCX", "OpenDisplay"]):
+                        target_dev = dev
+                        break
+                except Exception:
+                    pass
+
+        if target_dev:
+            try:
+                dm = win32api.EnumDisplaySettings(target_dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
+            except Exception:
+                try:
+                    dm = win32api.EnumDisplaySettings(target_dev.DeviceName, win32con.ENUM_REGISTRY_SETTINGS)
+                except Exception:
+                    dm = win32api.EnumDisplaySettings(target_dev.DeviceName, 0)
+
+            dm.PelsWidth = width
+            dm.PelsHeight = height
+            dm.Position_x = target_x
+            dm.Position_y = target_y
+            dm.DisplayFrequency = refresh_rate
+            dm.Fields = win32con.DM_PELSWIDTH | win32con.DM_PELSHEIGHT | win32con.DM_POSITION | win32con.DM_DISPLAYFREQUENCY
+            win32api.ChangeDisplaySettingsEx(target_dev.DeviceName, dm, win32con.CDS_UPDATEREGISTRY | win32con.CDS_NORESET)
+            win32api.ChangeDisplaySettingsEx(None, None, 0)
+            print(f"[OpenDisplay] Attached virtual display ({target_dev.DeviceName}) at bottom-left ({target_x}, {target_y}) @ {refresh_rate}Hz")
+    except Exception as e:
+        print(f"[OpenDisplay] Attach notice: {e}")
+
 def enable_virtual_display():
     devcon = _find_devcon()
     if devcon:
@@ -107,55 +193,13 @@ def enable_virtual_display():
                 time.sleep(1.0)
         except Exception:
             pass
-    align_secondary_display_bottom_left(refresh_rate=165)
-
-def align_secondary_display_bottom_left(refresh_rate=165):
-    """Ensure Windows places the secondary monitor in the bottom-left at 165Hz."""
-    try:
-        primary_height = 1080
-        for i in range(40):
-            try:
-                dev = win32api.EnumDisplayDevices(None, i)
-                if (dev.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) and (dev.StateFlags & win32con.DISPLAY_DEVICE_PRIMARY_DEVICE):
-                    dm = win32api.EnumDisplaySettings(dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
-                    primary_height = dm.PelsHeight
-                    break
-            except Exception:
-                pass
-
-        for i in range(40):
-            try:
-                dev = win32api.EnumDisplayDevices(None, i)
-                if (dev.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) and not (dev.StateFlags & win32con.DISPLAY_DEVICE_PRIMARY_DEVICE):
-                    dm = win32api.EnumDisplaySettings(dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
-                    target_x = -dm.PelsWidth
-                    target_y = primary_height - dm.PelsHeight
-                    changed = False
-                    if dm.Position_x != target_x or dm.Position_y != target_y:
-                        dm.Position_x = target_x
-                        dm.Position_y = target_y
-                        dm.Fields |= win32con.DM_POSITION
-                        changed = True
-                    if dm.DisplayFrequency != refresh_rate:
-                        dm.DisplayFrequency = refresh_rate
-                        dm.Fields |= win32con.DM_DISPLAYFREQUENCY
-                        changed = True
-                    if changed:
-                        win32api.ChangeDisplaySettingsEx(dev.DeviceName, dm, win32con.CDS_UPDATEREGISTRY)
-                        win32api.ChangeDisplaySettingsEx(None, None, 0)
-                        print(f"[OpenDisplay] Configured display at bottom-left ({target_x}, {target_y}) @ {refresh_rate}Hz")
-            except Exception:
-                pass
-    except Exception:
-        pass
+    attach_virtual_display(width=1280, height=800, refresh_rate=165)
 
 def disable_virtual_display():
-    """Detaches the virtual display driver if elevated."""
-    try:
-        if is_admin():
-            _run_devcon("disable")
-    except Exception:
-        pass
+    detach_virtual_display()
+
+align_secondary_display_bottom_left = attach_virtual_display
+atexit.register(detach_virtual_display)
 
 HTML_VIEWER = """<!DOCTYPE html>
 <html>
@@ -368,6 +412,7 @@ class USBMonitorThread(threading.Thread):
                     else:
                         if self.last_connected is not None:
                             print("[OpenDisplay] Tablet USB unplugged.")
+                            detach_virtual_display()
                             if hasattr(self.server, 'tray') and self.server.tray:
                                 self.server.tray.update_status(False)
             except Exception:
@@ -431,6 +476,10 @@ class OpenDisplayServer:
         self.is_running = False
         with self.frame_condition:
             self.frame_condition.notify_all()
+        try:
+            detach_virtual_display()
+        except Exception:
+            pass
         if hasattr(self, 'winusb') and self.winusb:
             try:
                 self.winusb.close()
