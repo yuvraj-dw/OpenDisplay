@@ -425,6 +425,17 @@ class USBMonitorThread(threading.Thread):
                             detach_virtual_display()
                             if hasattr(self.server, 'tray') and self.server.tray:
                                 self.server.tray.update_status(False)
+                elif connected:
+                    # If connected but no clients currently streaming (e.g. tablet app closed),
+                    # periodically refresh reverse tunnel so when tablet app is reopened it connects instantly
+                    has_clients = False
+                    if self.server.streamer:
+                        has_clients = len(getattr(self.server.streamer, '_clients', [])) > 0
+                    if not has_clients:
+                        now = time.time()
+                        if now - getattr(self, '_last_tunnel_refresh', 0) > 4.0:
+                            self._last_tunnel_refresh = now
+                            self.server.setup_usb_tunnel()
             except Exception:
                 pass
             time.sleep(2.0)

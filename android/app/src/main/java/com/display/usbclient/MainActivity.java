@@ -213,9 +213,40 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        checkAndRestartPipeline();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         enableFullscreenImmersive();
+        checkAndRestartPipeline();
+    }
+
+    @Override
+    public void onBackPressed() {
+        // Move task to back instead of terminating so user can reopen without cold restart
+        moveTaskToBack(true);
+    }
+
+    private synchronized void checkAndRestartPipeline() {
+        if (surfaceView != null) {
+            Surface surface = surfaceView.getHolder().getSurface();
+            if (surface != null && surface.isValid()) {
+                if (decoder == null || streamReceiver == null || !streamReceiver.isAlive()) {
+                    Log.i(TAG, "checkAndRestartPipeline: Valid surface with inactive pipeline. Reconnecting...");
+                    stopPipeline();
+                    try {
+                        decoder = new H264Decoder(surface, 1280, 800);
+                        initReceiver();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed reconnecting pipeline: " + e.getMessage(), e);
+                    }
+                }
+            }
+        }
     }
 
     @Override

@@ -39,6 +39,26 @@ def _get_encoded_chunks(encoder, frame):
     return []
 
 
+def is_keyframe(chunk: bytes) -> bool:
+    """Detects if an Annex B H.264 chunk contains an IDR keyframe (NAL type 5) or SPS (NAL type 7)."""
+    if not chunk:
+        return False
+    idx = 0
+    length = min(len(chunk), 128)
+    while idx < length - 4:
+        if chunk[idx:idx+3] == b'\x00\x00\x01':
+            if (chunk[idx+3] & 0x1F) in (5, 7):
+                return True
+            idx += 4
+        elif chunk[idx:idx+4] == b'\x00\x00\x00\x01':
+            if (chunk[idx+4] & 0x1F) in (5, 7):
+                return True
+            idx += 5
+        else:
+            idx += 1
+    return False
+
+
 class Streamer:
     """Streams captured screen frames over TCP to connected clients (e.g.
 
@@ -74,6 +94,7 @@ class Streamer:
 
         self._clients: list[socket.socket] = []
         self._clients_lock = threading.Lock()
+        self._latest_keyframe: bytes | None = None
         self._capture_thread: threading.Thread | None = None
         self._winusb_thread: threading.Thread | None = None
 
@@ -237,6 +258,8 @@ class Streamer:
                 for chunk in chunks:
                     if not chunk:
                         continue
+                    if is_keyframe(chunk):
+                        self._latest_keyframe = chunk
                     self.broadcast_packet(MSG_VIDEO, chunk)
 
                 elapsed = time.perf_counter() - t0
@@ -371,6 +394,10 @@ class Streamer:
         logger.info("Client connected. Starting screen capture stream...")
         try:
             self.send_config(client_sock)
+            # ponytail: immediately blast cached keyframe so newly reconnected clients render frame 0 instantly
+            if self._latest_keyframe:
+                packet = pack_message(MSG_VIDEO, self._latest_keyframe)
+                client_sock.sendall(packet)
         except (OSError, ConnectionResetError, BrokenPipeError) as e:
             logger.info(f"Client disconnected during config handshake: {e}")
             return
