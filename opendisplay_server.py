@@ -478,9 +478,23 @@ class OpenDisplayServer:
         if not self.adb or not os.path.exists(self.adb):
             return
         try:
-            subprocess.run([self.adb, "shell", "am", "start", "-n", "com.display.usbclient/.MainActivity"], capture_output=True, timeout=3, creationflags=0x08000000)
-        except Exception:
-            pass
+            # 1. Wake physical display from sleep (KEYCODE_WAKEUP = 224)
+            subprocess.run(
+                [self.adb, "shell", "input", "keyevent", "224"],
+                capture_output=True, timeout=2, creationflags=0x08000000
+            )
+            # 2. Dismiss swipe keyguard
+            subprocess.run(
+                [self.adb, "shell", "wm", "dismiss-keyguard"],
+                capture_output=True, timeout=2, creationflags=0x08000000
+            )
+            # 3. Launch MainActivity
+            subprocess.run(
+                [self.adb, "shell", "am", "start", "-n", "com.display.usbclient/.MainActivity"],
+                capture_output=True, timeout=3, creationflags=0x08000000
+            )
+        except Exception as e:
+            logger.warning(f"Failed waking tablet viewer: {e}")
 
     def stop(self):
         self.is_running = False
