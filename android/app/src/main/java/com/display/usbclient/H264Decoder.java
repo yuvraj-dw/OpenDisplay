@@ -52,11 +52,15 @@ public class H264Decoder {
     private void initializeCodec(Surface targetSurface, int w, int h) {
         try {
             MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, w, h);
+            try { format.setInteger(MediaFormat.KEY_PRIORITY, 0); } catch (Exception ignored) {}
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
                     format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
                 } catch (Exception ignored) {}
             }
+            try { format.setInteger("vendor.mtk-ext-dec-low-latency.enable", 1); } catch (Exception ignored) {}
+            try { format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1); } catch (Exception ignored) {}
+            try { format.setInteger("low-latency", 1); } catch (Exception ignored) {}
 
             MediaCodec decoder = null;
             try {
@@ -97,6 +101,9 @@ public class H264Decoder {
         synchronized (lock) {
             if (!isConfigured || isReleased || codec == null) return;
             try {
+                // Drain any previously ready output buffers to minimize frame pipeline latency
+                drainOutput(codec);
+
                 int inputIndex = codec.dequeueInputBuffer(DEFAULT_TIMEOUT_US);
                 if (inputIndex >= 0) {
                     ByteBuffer inputBuffer = codec.getInputBuffer(inputIndex);

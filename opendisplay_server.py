@@ -123,7 +123,7 @@ def detach_virtual_display():
     except Exception as e:
         print(f"[OpenDisplay] Detach notice: {e}")
 
-def attach_virtual_display(width=1280, height=800, refresh_rate=165):
+def attach_virtual_display(width=1280, height=800, refresh_rate=60):
     """Attaches and positions the virtual display without requiring UAC/admin."""
     try:
         primary_height = 1080
@@ -194,7 +194,7 @@ def enable_virtual_display():
                 time.sleep(1.0)
         except Exception:
             pass
-    attach_virtual_display(width=1280, height=800, refresh_rate=165)
+    attach_virtual_display(width=1280, height=800, refresh_rate=60)
 
 def disable_virtual_display():
     detach_virtual_display()

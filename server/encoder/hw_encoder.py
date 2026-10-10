@@ -152,6 +152,12 @@ class HardwareEncoder:
                 'ultrafast',
                 '-tune',
                 'zerolatency',
+                '-profile:v',
+                'baseline',
+                '-level',
+                '3.1',
+                '-refs',
+                '1',
                 '-bf',
                 '0',
                 '-b:v',
@@ -159,7 +165,7 @@ class HardwareEncoder:
                 '-maxrate',
                 self.bitrate or '6M',
                 '-bufsize',
-                '1M',
+                '512k',
                 '-g',
                 str(self.fps),
                 '-x264-params',
@@ -172,19 +178,29 @@ class HardwareEncoder:
                 '-preset',
                 'p1',
                 '-tune',
-                'll',
+                'ull',
+                '-profile:v',
+                'baseline',
+                '-level',
+                '3.1',
+                '-refs',
+                '1',
                 '-zerolatency',
                 '1',
                 '-delay',
                 '0',
                 '-bf',
                 '0',
+                '-rc-lookahead',
+                '0',
+                '-surfaces',
+                '2',
                 '-b:v',
                 self.bitrate or '6M',
                 '-maxrate',
                 self.bitrate or '6M',
                 '-bufsize',
-                '1M',
+                '512k',
                 '-g',
                 str(self.fps),
                 '-forced-idr',
@@ -305,20 +321,16 @@ class HardwareEncoder:
             self._proc.stdin.write(frame.tobytes())
             self._proc.stdin.flush()
 
-            # Collect output NAL packets
+            # Collect output NAL packets directly via condition wait
             chunks = []
-            start_time = time.time()
-            timeout = 2.0 if getattr(self, '_first_frame', False) else 0.1
-
-            while time.time() - start_time < timeout:
-                try:
-                    chunk = self._out_queue.get(timeout=0.005)
-                    chunks.append(chunk)
-                    while not self._out_queue.empty():
-                        chunks.append(self._out_queue.get_nowait())
-                    break
-                except queue.Empty:
-                    pass
+            timeout = 2.0 if getattr(self, '_first_frame', False) else 0.05
+            try:
+                chunk = self._out_queue.get(timeout=timeout)
+                chunks.append(chunk)
+                while not self._out_queue.empty():
+                    chunks.append(self._out_queue.get_nowait())
+            except queue.Empty:
+                pass
 
             self._first_frame = False
 

@@ -83,6 +83,9 @@ class DxgiScreenCapture:
         self._thread_local = threading.local()
         self._dxcam_camera = None
         self._dxcam_idx = None
+        self._dxcam_current_target = None
+        self._cached_displays = None
+        self._last_display_check_time = 0.0
 
         self._init_backend()
 
@@ -174,49 +177,87 @@ class DxgiScreenCapture:
             logger.debug(f"gdi unavailable: {e}")
             return False
 
-    def list_displays(self) -> list[dict[str, Any]]:
-        """List available display outputs."""
+    def list_displays(self, force_refresh: bool = False) -> list[dict[str, Any]]:
+        """List available display outputs with 2.0s caching to eliminate per-frame overhead."""
+        import time
+        now = time.time()
+        if not force_refresh and self._cached_displays and (now - self._last_display_check_time < 2.0):
+            return self._cached_displays
+
+        displays = []
         if self.backend == 'dxcam':
             try:
-                return self._list_displays_dxcam()
+                displays = self._list_displays_dxcam()
             except Exception as e:
                 logger.warning(f"Error listing displays with dxcam: {e}")
 
-        if self.backend == 'mss':
+        if not displays and (self.backend == 'mss' or self._sct is not None):
             try:
-                return self._list_displays_mss()
+                displays = self._list_displays_mss()
             except Exception as e:
                 logger.warning(f"Error listing displays with mss: {e}")
 
-        if self.backend == 'gdi':
+        if not displays and self.backend == 'gdi':
             try:
-                return self._list_displays_gdi()
+                displays = self._list_displays_gdi()
             except Exception as e:
                 logger.warning(f"Error listing displays with gdi: {e}")
 
-        return self._list_displays_headless()
+        if not displays:
+            displays = self._list_displays_headless()
+
+        self._cached_displays = displays
+        self._last_display_check_time = now
+        return displays
+
+    def _parse_dxcam_outputs(self) -> list[dict[str, Any]]:
+        """Parse dxcam.output_info() to extract precise (device_idx, output_idx) pairs."""
+        import re
+        import dxcam  # type: ignore
+
+        try:
+            info = dxcam.output_info()
+            pattern = re.compile(
+                r'Device\[(\d+)\]\s+Output\[(\d+)\]:\s*Res:\((\d+),\s*(\d+)\)\s*Rot:(\d+)\s*Primary:(\w+)'
+            )
+            outputs = []
+            for m in pattern.finditer(info):
+                outputs.append({
+                    'device_idx': int(m.group(1)),
+                    'output_idx': int(m.group(2)),
+                    'width': int(m.group(3)),
+                    'height': int(m.group(4)),
+                    'rotation': int(m.group(5)),
+                    'is_primary': (m.group(6).lower() == 'true')
+                })
+            return outputs
+        except Exception as e:
+            logger.debug(f"Failed parsing dxcam output info: {e}")
+            return []
 
     def _list_displays_dxcam(self) -> list[dict[str, Any]]:
         import dxcam  # type: ignore
 
-        info = dxcam.output_info()
+        dxcam_outs = self._parse_dxcam_outputs()
         mss_displays = self._list_displays_mss()
         displays = []
-        lines = [line.strip() for line in info.splitlines() if line.strip()]
-        for idx, line in enumerate(lines):
+        for idx, out in enumerate(dxcam_outs):
             if idx < len(mss_displays):
                 d = dict(mss_displays[idx])
                 d['id'] = idx
-                d['name'] = line
+                d['device_idx'] = out['device_idx']
+                d['output_idx'] = out['output_idx']
                 displays.append(d)
             else:
                 displays.append({
                     'id': idx,
-                    'name': line,
-                    'width': 1280 if idx > 0 else 1920,
-                    'height': 800 if idx > 0 else 1080,
-                    'left': -1280 if idx > 0 else 0,
-                    'top': 280 if idx > 0 else 0,
+                    'name': f"Display {idx}",
+                    'width': out['width'],
+                    'height': out['height'],
+                    'left': -out['width'] if idx > 0 else 0,
+                    'top': 0,
+                    'device_idx': out['device_idx'],
+                    'output_idx': out['output_idx'],
                 })
         return displays if displays else self._list_displays_headless()
 
@@ -290,7 +331,8 @@ class DxgiScreenCapture:
             except Exception as e:
                 logger.warning(f"dxcam capture failed: {e}")
 
-        if frame is None and (self.backend == 'mss' or self._sct is not None):
+        # Only fallback to MSS if backend is not dxcam or if dxcam had an unrecoverable failure
+        if frame is None and self.backend != 'dxcam' and (self.backend == 'mss' or self._sct is not None):
             try:
                 frame = self._capture_mss(display_idx)
             except Exception as e:
@@ -302,7 +344,7 @@ class DxgiScreenCapture:
             except Exception as e:
                 logger.warning(f"gdi capture failed: {e}")
 
-        if frame is None:
+        if frame is None and self.backend not in ('dxcam', 'mss', 'gdi'):
             frame = self._capture_headless(display_idx)
 
         if frame is not None:
@@ -426,18 +468,35 @@ class DxgiScreenCapture:
     def _capture_dxcam(self, display_idx: int) -> np.ndarray | None:
         import dxcam  # type: ignore
 
-        if self._dxcam_camera is None or self._dxcam_idx != display_idx:
+        displays = self.list_displays()
+        dev_idx = 0
+        out_idx = display_idx
+        if display_idx < len(displays) and 'device_idx' in displays[display_idx]:
+            dev_idx = displays[display_idx]['device_idx']
+            out_idx = displays[display_idx]['output_idx']
+
+        target = (dev_idx, out_idx)
+        if self._dxcam_camera is None or getattr(self, '_dxcam_current_target', None) != target:
             if self._dxcam_camera is not None:
+                try:
+                    self._dxcam_camera.stop()
+                except Exception:
+                    pass
                 del self._dxcam_camera
-            self._dxcam_camera = dxcam.create(output_idx=display_idx)
+                self._dxcam_camera = None
+
+            self._dxcam_camera = dxcam.create(device_idx=dev_idx, output_idx=out_idx)
+            if self._dxcam_camera:
+                self._dxcam_camera.start(target_fps=60, video_mode=True)
+            self._dxcam_current_target = target
             self._dxcam_idx = display_idx
 
-        frame = self._dxcam_camera.grab()
-        if frame is not None:
-            # dxcam returns RGB numpy array, convert to BGR or keep 3 channels
-            if frame.shape[2] == 4:
-                return frame[:, :, :3]
-            return frame
+        if self._dxcam_camera:
+            frame = self._dxcam_camera.get_latest_frame()
+            if frame is not None:
+                if frame.shape[2] == 4:
+                    return frame[:, :, :3]
+                return frame
         return None
 
     def _capture_mss(self, display_idx: int) -> np.ndarray | None:
@@ -516,8 +575,13 @@ class DxgiScreenCapture:
                 pass
             self._thread_local.sct = None
         if self._dxcam_camera:
+            try:
+                self._dxcam_camera.stop()
+            except Exception:
+                pass
             del self._dxcam_camera
             self._dxcam_camera = None
+            self._dxcam_current_target = None
 
     def __enter__(self):
         return self
