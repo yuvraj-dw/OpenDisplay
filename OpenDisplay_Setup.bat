@@ -64,6 +64,11 @@ echo [Step 3/4] Establishing USB High-Speed Tunnel...
 echo Tunnel active (tcp:7070 native app, tcp:8080 web viewer).
 echo.
 
+:: Step 3.5: Enable Start with Windows on Boot
+echo [Step 3.5/4] Enabling Start with Windows on Boot...
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "OpenDisplay" /t REG_SZ /d "\"%~dp0dist\OpenDisplay\OpenDisplay.exe\"" /f >nul 2>nul
+echo.
+
 :: Step 4: Launching
 echo [Step 4/4] Launching OpenDisplay on tablet and starting PC streamer...
 %ADB% shell am start -n com.display.usbclient/.MainActivity

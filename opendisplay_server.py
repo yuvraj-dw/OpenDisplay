@@ -26,6 +26,7 @@ from server.capture.dxgi_capture import DxgiScreenCapture
 from server.encoder.hw_encoder import HardwareEncoder
 from server.streamer import Streamer
 from server.transport.winusb_transport import WinUsbTransport
+from server.autostart import is_autostart_enabled, set_autostart
 
 logger = logging.getLogger("OpenDisplay")
 
@@ -332,6 +333,15 @@ class SystemTray:
 
         win32gui.PumpMessages()
 
+    def _handle_menu_command(self, cmd):
+        if cmd == 1003:
+            webbrowser.open(f"http://127.0.0.1:{PORT}/")
+        elif cmd == 1004:
+            self.server.stop()
+        elif cmd == 1005:
+            current = is_autostart_enabled()
+            set_autostart(not current)
+
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         if msg == win32con.WM_USER + 20:
             if lparam == win32con.WM_RBUTTONUP or lparam == win32con.WM_CONTEXTMENU:
@@ -341,6 +351,9 @@ class SystemTray:
                 win32gui.AppendMenu(menu, win32con.MF_STRING | win32con.MF_GRAYED, 1002, status_txt)
                 win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
                 win32gui.AppendMenu(menu, win32con.MF_STRING, 1003, "Open Tablet Viewer (Browser)")
+                autostart_flag = win32con.MF_CHECKED if is_autostart_enabled() else win32con.MF_UNCHECKED
+                win32gui.AppendMenu(menu, win32con.MF_STRING | autostart_flag, 1005, "Start with Windows")
+                win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
                 win32gui.AppendMenu(menu, win32con.MF_STRING, 1004, "Exit OpenDisplay")
 
                 pos = win32gui.GetCursorPos()
@@ -348,10 +361,7 @@ class SystemTray:
                 cmd = win32gui.TrackPopupMenu(menu, win32con.TPM_RETURNCMD, pos[0], pos[1], 0, hwnd, None)
                 win32gui.DestroyMenu(menu)
 
-                if cmd == 1003:
-                    webbrowser.open(f"http://127.0.0.1:{PORT}/")
-                elif cmd == 1004:
-                    self.server.stop()
+                self._handle_menu_command(cmd)
             elif lparam == win32con.WM_LBUTTONDBLCLK:
                 webbrowser.open(f"http://127.0.0.1:{PORT}/")
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
