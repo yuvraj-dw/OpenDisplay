@@ -182,6 +182,15 @@ public class H264Decoder {
                 int outputIndex = activeCodec.dequeueOutputBuffer(info, 10000);
                 if (outputIndex >= 0) {
                     activeCodec.releaseOutputBuffer(outputIndex, true);
+                    // ponytail: immediately drain any queued ready frames without 10ms wait
+                    while (isRunning && !isReleased) {
+                        int nextIdx = activeCodec.dequeueOutputBuffer(info, 0);
+                        if (nextIdx >= 0) {
+                            activeCodec.releaseOutputBuffer(nextIdx, true);
+                        } else {
+                            break;
+                        }
+                    }
                 } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     Log.i(TAG, "MediaCodec output format changed: " + activeCodec.getOutputFormat());
                 }

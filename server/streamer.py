@@ -184,16 +184,21 @@ class Streamer:
             except Exception:
                 pass
 
+        displays = []
+        last_disp_check = 0.0
+
         try:
             while self.is_running and not self._stop_event.is_set():
                 t0 = time.perf_counter()
 
-                displays = []
-                if hasattr(self.capture, 'list_displays'):
-                    try:
-                        displays = self.capture.list_displays() or []
-                    except Exception as e:
-                        logger.debug(f"Error checking displays: {e}")
+                # ponytail: check displays at most every 2 seconds instead of every frame
+                if not displays or (t0 - last_disp_check > 2.0):
+                    if hasattr(self.capture, 'list_displays'):
+                        try:
+                            displays = self.capture.list_displays() or []
+                        except Exception as e:
+                            logger.debug(f"Error checking displays: {e}")
+                    last_disp_check = t0
 
                 if not displays:
                     time.sleep(0.02)
@@ -353,8 +358,10 @@ class Streamer:
         """Streaming loop and client event reader for an accepted client connection."""
         try:
             client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            # ponytail: 256KB send buffer prevents keyframe stalling on high-fps bursts
+            client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
         except Exception as e:
-            logger.debug(f"Failed setting TCP_NODELAY on client socket: {e}")
+            logger.debug(f"Failed setting TCP options on client socket: {e}")
 
         try:
             client_sock.settimeout(0.5)
