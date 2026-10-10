@@ -199,6 +199,12 @@ class HardwareEncoder:
                 '1',
                 '-flush_packets',
                 '1',
+                '-colorspace',
+                'bt709',
+                '-color_primaries',
+                'bt709',
+                '-color_trc',
+                'bt709',
             ])
         elif target_codec == 'h264_mf':
             cmd.extend([

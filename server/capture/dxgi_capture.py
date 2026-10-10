@@ -143,7 +143,7 @@ class DxgiScreenCapture:
         try:
             import dxcam  # type: ignore
 
-            cam = dxcam.create()
+            cam = dxcam.create(output_color="BGR")
             if cam is not None:
                 del cam
                 return True
@@ -487,7 +487,7 @@ class DxgiScreenCapture:
                 del self._dxcam_camera
                 self._dxcam_camera = None
 
-            self._dxcam_camera = dxcam.create(device_idx=dev_idx, output_idx=out_idx)
+            self._dxcam_camera = dxcam.create(device_idx=dev_idx, output_idx=out_idx, output_color="BGR")
             if self._dxcam_camera and not getattr(self._dxcam_camera, 'is_capturing', False):
                 try:
                     self._dxcam_camera.start(target_fps=60, video_mode=True)
