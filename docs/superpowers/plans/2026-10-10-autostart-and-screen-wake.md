@@ -404,20 +404,20 @@ git commit -m "feat(host): send adb screen wakeup and keyguard dismissal on tabl
 - Rebuild: `OpenDisplay-v1.1.0-windows-x64.zip`
 - On-device test: Verify tablet screen wakes from deep sleep (`input keyevent 223` -> reconnect -> display turns on).
 
-- [ ] **Step 1: Run full automated test suite**
+- [x] **Step 1: Run full automated test suite**
 
 Run: `python -m unittest discover -s tests`
 Expected: All 79+ tests pass.
 
-- [ ] **Step 2: Rebuild PyInstaller binary and package release archive**
+- [x] **Step 2: Rebuild PyInstaller binary and package release archive**
 
 Compile `OpenDisplay.exe` and compress `OpenDisplay-v1.1.0-windows-x64.zip`.
 
-- [ ] **Step 3: Deploy updated APK to connected tablet and test screen wakeup**
+- [x] **Step 3: Deploy updated APK to connected tablet and test screen wakeup**
 
 Install APK on device, put tablet screen to sleep, trigger `launch_tablet_viewer()`, confirm display turns ON and video streams.
 
-- [ ] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push**
 
 ```bash
 git commit -am "chore(release): package windows boot autostart and zero-touch tablet wakeup"

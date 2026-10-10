@@ -10,6 +10,7 @@ build_tools/
 build/
 dist/
 *.spec
+!OpenDisplay.spec
 
 # Android Gradle build artifacts
 android/.gradle/
