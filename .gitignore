@@ -30,11 +30,9 @@ android/app/build/
 venv/
 env/
 *.log
-tablet_screen.png
-tablet_native_live.png
+*.png
 .superpowers/
-docs/*
-!docs/superpowers/
+docs/
 release_staging/
 *.zip
 
