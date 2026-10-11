@@ -401,14 +401,13 @@ class USBMonitorThread(threading.Thread):
                 adb = self.server.adb
                 connected = False
                 if adb and os.path.exists(adb):
-                    res = subprocess.run(
-                        [adb, "get-state"],
-                        capture_output=True,
-                        text=True,
-                        creationflags=0x08000000,
-                        timeout=2
-                    )
-                    connected = (res.returncode == 0 and "device" in res.stdout)
+                    res = self.server.run_adb(["devices"], timeout=3.0)
+                    if "offline" in res.stdout:
+                        logger.debug("Device offline detected, attempting adb reconnect...")
+                        self.server.run_adb(["reconnect"], timeout=2.0)
+                        res = self.server.run_adb(["devices"], timeout=2.0)
+                    lines = [line.strip() for line in res.stdout.strip().split('\n')[1:] if line.strip()]
+                    connected = any('\tdevice' in line or line.endswith(' device') for line in lines)
 
                 if connected != self.last_connected:
                     self.last_connected = connected
@@ -470,40 +469,75 @@ class OpenDisplayServer:
             os.path.abspath(os.path.join(os.path.dirname(__file__), "app_win", "adb.exe")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "app_win", "adb.exe")),
         ]
+        adb_binary = None
         for c in candidates:
             if c and os.path.exists(c):
-                return c
-        return shutil.which("adb.exe") or shutil.which("adb")
+                adb_binary = c
+                break
+        if not adb_binary:
+            adb_binary = shutil.which("adb.exe") or shutil.which("adb")
+
+        # Ensure background ADB daemon is running without pipe hangs
+        if adb_binary and os.path.exists(adb_binary):
+            try:
+                subprocess.Popen(
+                    [adb_binary, "start-server"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    creationflags=0x08000000,
+                )
+            except Exception as e:
+                logger.debug(f"Notice starting ADB daemon: {e}")
+
+        return adb_binary
+
+    def run_adb(self, args: list, timeout: int = 3) -> subprocess.CompletedProcess:
+        """Executes an ADB command safely with timeout and auto-daemon recovery."""
+        if not self.adb or not os.path.exists(self.adb):
+            return subprocess.CompletedProcess(args, 1, "", "adb not found")
+        try:
+            return subprocess.run(
+                [self.adb] + args,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                creationflags=0x08000000,
+            )
+        except subprocess.TimeoutExpired:
+            # ADB daemon might be stuck or starting; kick it asynchronously and return failure
+            try:
+                subprocess.Popen(
+                    [self.adb, "start-server"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    creationflags=0x08000000,
+                )
+            except Exception:
+                pass
+            return subprocess.CompletedProcess(args, 1, "", "timeout")
 
     def setup_usb_tunnel(self):
-        if not self.adb or not os.path.exists(self.adb):
-            return
-        try:
-            subprocess.run([self.adb, "reverse", f"tcp:{STREAM_PORT}", f"tcp:{STREAM_PORT}"], capture_output=True, timeout=3, creationflags=0x08000000)
-            subprocess.run([self.adb, "reverse", f"tcp:{PORT}", f"tcp:{PORT}"], capture_output=True, timeout=3, creationflags=0x08000000)
+        res1 = self.run_adb(["reverse", f"tcp:{STREAM_PORT}", f"tcp:{STREAM_PORT}"], timeout=3)
+        res2 = self.run_adb(["reverse", f"tcp:{PORT}", f"tcp:{PORT}"], timeout=3)
+        if res1.returncode == 0 and res2.returncode == 0:
             print("[OpenDisplay] USB Reverse Tunnel established.")
-        except Exception as e:
-            print(f"[OpenDisplay] ADB reverse setup notice: {e}")
+        else:
+            logger.debug(f"ADB reverse status: {res1.stderr} / {res2.stderr}")
 
     def launch_tablet_viewer(self):
         if not self.adb or not os.path.exists(self.adb):
             return
         try:
             # 1. Wake physical display from sleep (KEYCODE_WAKEUP = 224)
-            subprocess.run(
-                [self.adb, "shell", "input", "keyevent", "224"],
-                capture_output=True, timeout=2, creationflags=0x08000000
-            )
+            self.run_adb(["shell", "input", "keyevent", "224"], timeout=2)
             # 2. Dismiss swipe keyguard
-            subprocess.run(
-                [self.adb, "shell", "wm", "dismiss-keyguard"],
-                capture_output=True, timeout=2, creationflags=0x08000000
-            )
+            self.run_adb(["shell", "wm", "dismiss-keyguard"], timeout=2)
             # 3. Launch MainActivity
-            subprocess.run(
-                [self.adb, "shell", "am", "start", "-n", "com.display.usbclient/.MainActivity"],
-                capture_output=True, timeout=3, creationflags=0x08000000
-            )
+            self.run_adb(["shell", "am", "start", "-n", "com.display.usbclient/.MainActivity"], timeout=3)
         except Exception as e:
             logger.warning(f"Failed waking tablet viewer: {e}")
 
@@ -805,8 +839,6 @@ class OpenDisplayServer:
             self.stop()
 
 if __name__ == "__main__":
-    enable_virtual_display()
-
     temp_cap = DxgiScreenCapture(backend="auto")
     displays = temp_cap.list_displays()
 

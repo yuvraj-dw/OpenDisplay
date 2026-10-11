@@ -50,9 +50,9 @@ class TestHostWake(unittest.TestCase):
         server.launch_tablet_viewer()
 
         expected_calls = [
-            call(["adb.exe", "shell", "input", "keyevent", "224"], capture_output=True, timeout=2, creationflags=0x08000000),
-            call(["adb.exe", "shell", "wm", "dismiss-keyguard"], capture_output=True, timeout=2, creationflags=0x08000000),
-            call(["adb.exe", "shell", "am", "start", "-n", "com.display.usbclient/.MainActivity"], capture_output=True, timeout=3, creationflags=0x08000000),
+            call(["adb.exe", "shell", "input", "keyevent", "224"], capture_output=True, text=True, timeout=2, creationflags=0x08000000),
+            call(["adb.exe", "shell", "wm", "dismiss-keyguard"], capture_output=True, text=True, timeout=2, creationflags=0x08000000),
+            call(["adb.exe", "shell", "am", "start", "-n", "com.display.usbclient/.MainActivity"], capture_output=True, text=True, timeout=3, creationflags=0x08000000),
         ]
         mock_run.assert_has_calls(expected_calls, any_order=False)
 

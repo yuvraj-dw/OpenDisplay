@@ -67,7 +67,11 @@ echo.
 :: Step 3.5: Enable Start with Windows on Boot and create Start Menu Shortcut
 echo [Step 3.5/4] Creating Start Menu shortcut and enabling autostart...
 powershell -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'OpenDisplay.lnk')); if (Test-Path '%~dp0dist\OpenDisplay\OpenDisplay.exe') { $sc.TargetPath = '%~dp0dist\OpenDisplay\OpenDisplay.exe'; $sc.WorkingDirectory = '%~dp0dist\OpenDisplay'; } else { $sc.TargetPath = '%~dp0OpenDisplay.exe'; $sc.WorkingDirectory = '%~dp0'; }; if (Test-Path '%~dp0app_icon.ico') { $sc.IconLocation = '%~dp0app_icon.ico,0'; }; $sc.Description = 'OpenDisplay - Android USB Extended Monitor'; $sc.Save()" >nul 2>nul
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "OpenDisplay" /t REG_SZ /d "\"%~dp0dist\OpenDisplay\OpenDisplay.exe\"" /f >nul 2>nul
+if exist "%~dp0dist\OpenDisplay\OpenDisplay.exe" (
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "OpenDisplay" /t REG_SZ /d "\"%~dp0dist\OpenDisplay\OpenDisplay.exe\"" /f >nul 2>nul
+) else (
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "OpenDisplay" /t REG_SZ /d "\"%~dp0OpenDisplay.exe\"" /f >nul 2>nul
+)
 echo.
 
 :: Step 4: Launching
