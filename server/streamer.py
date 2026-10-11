@@ -226,10 +226,24 @@ class Streamer:
                     continue
 
                 idx = self.display_idx
-                if idx >= len(displays):
-                    idx = len(displays) - 1
-                if idx < 0:
-                    idx = 0
+                # ponytail: If display_idx was initialized to 0 (default) or out-of-range, but multiple displays exist,
+                # dynamically resolve to the extended secondary monitor (1280x800 or non-primary) so we NEVER mirror Display 0.
+                if len(displays) > 1:
+                    target_candidate = None
+                    for i, d in enumerate(displays):
+                        # Match 1280x800 tablet virtual display resolution or offset position
+                        if (d.get('width') == 1280 and d.get('height') == 800) or (d.get('left') != 0 or d.get('top') != 0):
+                            target_candidate = i
+                            break
+                    if target_candidate is not None:
+                        idx = target_candidate
+                    elif idx >= len(displays) or idx == 0:
+                        idx = 1
+                else:
+                    if idx >= len(displays):
+                        idx = len(displays) - 1
+                    if idx < 0:
+                        idx = 0
 
                 try:
                     frame = self.capture.capture_frame(display_idx=idx)

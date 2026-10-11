@@ -414,6 +414,9 @@ class USBMonitorThread(threading.Thread):
                     if connected:
                         print("[OpenDisplay] Tablet USB plugged in! Activating 165Hz monitor...")
                         enable_virtual_display()
+                        self.server.display_idx = self.server._resolve_target_display_idx()
+                        if self.server.streamer:
+                            self.server.streamer.display_idx = self.server.display_idx
                         self.server.setup_usb_tunnel()
                         self.server.launch_tablet_viewer()
                         if hasattr(self.server, 'tray') and self.server.tray:
@@ -610,7 +613,23 @@ class OpenDisplayServer:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
+    def _resolve_target_display_idx(self) -> int:
+        """Finds the virtual display index among available monitors to guarantee extending rather than mirroring."""
+        try:
+            displays = self.capture.list_displays()
+            if len(displays) > 1:
+                for i, d in enumerate(displays):
+                    if (d.get('width') == 1280 and d.get('height') == 800) or (d.get('left') != 0 or d.get('top') != 0):
+                        return i
+                return 1
+        except Exception:
+            pass
+        return 0
+
     def start(self):
+        # Dynamically auto-resolve display index to the extended virtual monitor if available
+        self.display_idx = self._resolve_target_display_idx()
+
         # Start tray icon
         self.tray = SystemTray(self)
 
