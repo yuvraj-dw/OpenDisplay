@@ -64,8 +64,9 @@ echo [Step 3/4] Establishing USB High-Speed Tunnel...
 echo Tunnel active (tcp:7070 native app, tcp:8080 web viewer).
 echo.
 
-:: Step 3.5: Enable Start with Windows on Boot
-echo [Step 3.5/4] Enabling Start with Windows on Boot...
+:: Step 3.5: Enable Start with Windows on Boot and create Start Menu Shortcut
+echo [Step 3.5/4] Creating Start Menu shortcut and enabling autostart...
+powershell -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'OpenDisplay.lnk')); if (Test-Path '%~dp0dist\OpenDisplay\OpenDisplay.exe') { $sc.TargetPath = '%~dp0dist\OpenDisplay\OpenDisplay.exe'; $sc.WorkingDirectory = '%~dp0dist\OpenDisplay'; } else { $sc.TargetPath = '%~dp0OpenDisplay.exe'; $sc.WorkingDirectory = '%~dp0'; }; if (Test-Path '%~dp0app_icon.ico') { $sc.IconLocation = '%~dp0app_icon.ico,0'; }; $sc.Description = 'OpenDisplay - Android USB Extended Monitor'; $sc.Save()" >nul 2>nul
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "OpenDisplay" /t REG_SZ /d "\"%~dp0dist\OpenDisplay\OpenDisplay.exe\"" /f >nul 2>nul
 echo.
 
