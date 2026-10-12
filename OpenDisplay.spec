@@ -4,13 +4,34 @@
 a = Analysis(
     ['opendisplay_server.py'],
     pathex=[],
-    binaries=[('app_win/adb.exe', '.'), ('app_win/AdbWinApi.dll', '.'), ('app_win/AdbWinUsbApi.dll', '.'), ('server/driver/vdd_bin/VirtualDisplayDriver/devcon.exe', '.')],
-    datas=[('app_icon.ico', '.'), ('app_icon.png', '.'), ('server/driver/aoap_bin/opendisplay_aoap.inf', '.')],
+    binaries=[
+        ('app_win/adb.exe', '.'),
+        ('app_win/AdbWinApi.dll', '.'),
+        ('app_win/AdbWinUsbApi.dll', '.'),
+        ('server/driver/vdd_bin/VirtualDisplayDriver/devcon.exe', 'driver'),
+        ('server/driver/vdd_bin/VirtualDisplayDriver/MttVDD.dll', 'driver'),
+        ('server/driver/vdd_bin/VirtualDisplayDriver/mttvdd.cat', 'driver'),
+    ],
+    datas=[
+        ('app_icon.ico', '.'),
+        ('app_icon.png', '.'),
+        ('server/driver/aoap_bin/opendisplay_aoap.inf', 'driver'),
+        ('server/driver/vdd_bin/VirtualDisplayDriver/MttVDD.inf', 'driver'),
+        ('server/driver/vdd_bin/VirtualDisplayDriver/Virtual_Display_Driver.cer', 'driver'),
+        ('server/driver/vdd_bin/VirtualDisplayDriver/vdd_settings.xml', 'driver'),
+    ],
     hiddenimports=['server.autostart', 'dxcam', 'comtypes'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'torch', 'tensorflow', 'keras', 'playwright', 'selenium',
+        'xgboost', 'scipy', 'matplotlib', 'pandas', 'seaborn',
+        'onnxruntime', 'chromadb', 'IPython', 'ipykernel', 'jupyter',
+        'nltk', 'gensim', 'mediapipe', 'h5py', 'pyarrow',
+        'transformers', 'tokenizers', 'llama_index', 'langchain',
+        'pytest', 'libclang', 'flatbuffers', 'jax', 'tensorboard'
+    ],
     noarchive=False,
     optimize=0,
 )
@@ -19,8 +40,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='OpenDisplay',
     debug=False,
     bootloader_ignore_signals=False,
@@ -33,13 +55,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['app_icon.ico'],
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='OpenDisplay',
 )

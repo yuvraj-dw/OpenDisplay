@@ -218,12 +218,9 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                 if (statusSpinner != null) {
                     statusSpinner.setVisibility(View.GONE);
                 }
-                // Transition to hardware surface view
+                // Hide idle dashboard overlay to reveal streaming SurfaceView
                 if (idleLayout != null) {
                     idleLayout.setVisibility(View.GONE);
-                }
-                if (surfaceView != null) {
-                    surfaceView.setVisibility(View.VISIBLE);
                 }
                 isStreamingActive = true;
             }
@@ -243,10 +240,7 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                 if (statusSpinner != null) {
                     statusSpinner.setVisibility(View.VISIBLE);
                 }
-                // Restore idle dashboard over surface
-                if (surfaceView != null) {
-                    surfaceView.setVisibility(View.GONE);
-                }
+                // Show idle dashboard overlay over the SurfaceView
                 if (idleLayout != null) {
                     idleLayout.setVisibility(View.VISIBLE);
                 }

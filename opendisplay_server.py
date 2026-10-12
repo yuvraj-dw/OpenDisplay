@@ -39,11 +39,24 @@ except Exception:
     except Exception:
         pass
 
-# Safe null guards for windowed / no-console mode
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w")
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w")
+# Safe logging for windowed / no-console mode
+log_dir = os.path.join(os.environ.get("LOCALAPPDATA", os.environ.get("TEMP", os.getcwd())), "OpenDisplay")
+try:
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir, "opendisplay.log")
+    log_fp = open(log_file_path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = log_fp
+    sys.stderr = log_fp
+    logging.basicConfig(
+        stream=log_fp,
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
+except Exception:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
 
 # Hide console window if launched from cmd/batch
 try:
@@ -62,16 +75,36 @@ def is_admin():
     except Exception:
         return False
 
-def _find_devcon():
+def _get_resource_path(relative_path: str) -> str:
     candidates = [
-        os.path.join(os.path.dirname(sys.executable), "devcon.exe"),
-        os.path.join(os.path.dirname(sys.executable), "_internal", "devcon.exe"),
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "server", "driver", "vdd_bin", "VirtualDisplayDriver", "devcon.exe")),
-        os.path.join(os.getcwd(), "server", "driver", "vdd_bin", "VirtualDisplayDriver", "devcon.exe"),
+        os.path.join(getattr(sys, "_MEIPASS", ""), relative_path),
+        os.path.join(os.path.dirname(sys.executable), relative_path),
+        os.path.join(os.path.dirname(sys.executable), "_internal", relative_path),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path)),
+        os.path.join(os.getcwd(), relative_path),
     ]
     for c in candidates:
         if c and os.path.exists(c):
             return c
+    return ""
+
+def _find_driver_asset(filename: str) -> str:
+    subdirs = [
+        os.path.join("driver", filename),
+        os.path.join("server", "driver", "vdd_bin", "VirtualDisplayDriver", filename),
+        os.path.join("server", "driver", "aoap_bin", filename),
+        filename,
+    ]
+    for rel in subdirs:
+        found = _get_resource_path(rel)
+        if found:
+            return found
+    return ""
+
+def _find_devcon():
+    found = _find_driver_asset("devcon.exe")
+    if found:
+        return found
     return shutil.which("devcon.exe") or shutil.which("devcon")
 
 def _run_devcon(action):
@@ -96,6 +129,75 @@ def _run_devcon(action):
     except Exception as e:
         print(f"[OpenDisplay] Devcon {action} error: {e}")
         return False
+
+def _install_driver_package():
+    """Installs Virtual Display Driver and WinUSB drivers silently with a single UAC prompt."""
+    devcon = _find_devcon()
+    inf = _find_driver_asset("MttVDD.inf")
+    cer = _find_driver_asset("Virtual_Display_Driver.cer")
+    settings = _find_driver_asset("vdd_settings.xml")
+    aoap = _find_driver_asset("opendisplay_aoap.inf")
+
+    if not inf or not cer or not devcon:
+        logger.debug("[OpenDisplay] Driver installation assets missing, skipping auto-install.")
+        return False
+
+    script_lines = [
+        f'certutil -addstore -f root "{cer}"',
+        f'certutil -addstore -f TrustedPublisher "{cer}"',
+        f'pnputil /add-driver "{inf}" /install',
+        f'& "{devcon}" install "{inf}" Root\\MttVDD',
+    ]
+    if aoap:
+        script_lines.append(f'pnputil /add-driver "{aoap}" /install')
+    if settings:
+        script_lines.append(
+            'if (-not (Test-Path "C:\\VirtualDisplayDriver")) { New-Item -ItemType Directory -Path "C:\\VirtualDisplayDriver" -Force | Out-Null }; '
+            f'Copy-Item -Path "{settings}" -Destination "C:\\VirtualDisplayDriver\\vdd_settings.xml" -Force'
+        )
+
+    exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+    exe_dir = os.path.dirname(exe_path)
+    icon_path = _find_driver_asset("app_icon.ico")
+    shortcut_ps = (
+        "$ws = New-Object -ComObject WScript.Shell; "
+        f"$sc = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'OpenDisplay.lnk')); "
+        f"$sc.TargetPath = '{exe_path}'; $sc.WorkingDirectory = '{exe_dir}'; "
+    )
+    if icon_path:
+        shortcut_ps += f"$sc.IconLocation = '{icon_path},0'; "
+    shortcut_ps += "$sc.Description = 'OpenDisplay - Android USB Extended Monitor'; $sc.Save()"
+    script_lines.append(shortcut_ps)
+
+    combined_cmd = "; ".join(script_lines)
+
+    try:
+        if is_admin():
+            subprocess.run(["powershell", "-NoProfile", "-Command", combined_cmd], capture_output=True, creationflags=0x08000000, timeout=15)
+        else:
+            ps_runner = f'Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command \\"{combined_cmd}\\"" -Verb RunAs -WindowStyle Hidden -Wait'
+            subprocess.run(["powershell", "-Command", ps_runner], capture_output=True, creationflags=0x08000000, timeout=20)
+        return True
+    except Exception as e:
+        logger.error(f"[OpenDisplay] Driver auto-installation error: {e}")
+        return False
+
+def ensure_driver_installed():
+    """Checks if the Virtual Display Driver is installed; runs one-time setup if missing."""
+    devcon = _find_devcon()
+    if not devcon:
+        return
+    try:
+        res = subprocess.run([devcon, "status", "Root\\MttVDD"], capture_output=True, text=True, creationflags=0x08000000, timeout=3)
+        if "matching device" in res.stdout.lower() and "running" in res.stdout.lower():
+            return
+        if "matching device" in res.stdout.lower() and "disabled" in res.stdout.lower():
+            _run_devcon("enable")
+            return
+    except Exception as e:
+        logger.debug(f"Devcon status check error: {e}")
+
+    _install_driver_package()
 
 def detach_virtual_display():
     """Detaches the virtual display from the Windows desktop cleanly without UAC."""
@@ -876,6 +978,7 @@ class OpenDisplayServer:
             self.stop()
 
 if __name__ == "__main__":
+    ensure_driver_installed()
     temp_cap = DxgiScreenCapture(backend="auto")
     displays = temp_cap.list_displays()
 
