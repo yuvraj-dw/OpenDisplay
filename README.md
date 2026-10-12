@@ -52,11 +52,8 @@
 2. Enable **USB Debugging** under Developer Options on your tablet (only needed if using ADB mode).
 
 ### 2. Windows PC Setup
-1. Download **`OpenDisplay-v1.1.0-windows-x64.zip`** from [Releases](https://github.com/yuvraj-dw/OpenDisplay/releases) and extract it.
-2. Run **`OpenDisplay_Setup.bat`** once. This:
-   - Installs the Virtual Display Driver (UMDF).
-   - Installs the WinUSB AOAP driver.
-   - Registers OpenDisplay to start automatically with Windows.
+1. Download **`OpenDisplay.exe`** from [Releases](https://github.com/yuvraj-dw/OpenDisplay/releases).
+2. Double-click **`OpenDisplay.exe`**. On first launch, it will silently register the virtual display driver and minimize to the system tray.
 3. Plug in your tablet via USB. OpenDisplay will detect the connection, turn on your tablet screen, and display your extended Windows desktop immediately.
 
 ---
@@ -74,7 +71,7 @@ Right-click the OpenDisplay icon in the Windows notification area to:
 ## Repository Structure
 
 ```
-├── android/              # Native Android client (Java/Kotlin, SurfaceView, MediaCodec)
+├── android/              # Native Android client (Java, SurfaceView, MediaCodec)
 ├── server/               # Python streaming host
 │   ├── capture/          # DXGI (DXCAM) and GDI desktop capture engines
 │   ├── encoder/          # Hardware NVENC / libx264 low-latency video encoder
@@ -83,7 +80,8 @@ Right-click the OpenDisplay icon in the Windows notification area to:
 │   └── autostart.py      # Windows Registry autostart manager
 ├── tests/                # Automated unit and integration test suite (104 tests)
 ├── opendisplay_server.py # Core server orchestration & Win32 system tray
-├── OpenDisplay_Setup.bat # One-click Windows setup launcher
+├── OpenDisplay.exe       # Standalone 1-file Windows executable (self-installing)
+├── OpenDisplay.apk       # Standalone Android client APK
 └── build_apk.ps1         # Standalone Android APK build script
 ```
 

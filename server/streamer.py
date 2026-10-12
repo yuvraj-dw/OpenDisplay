@@ -461,6 +461,16 @@ class Streamer:
                                 self.handle_input_event(action, normX, normY)
                             except ValueError as e:
                                 logger.debug(f"Invalid float in mouse event line '{line}': {e}")
+                    elif line.startswith('res:'):
+                        parts = line.split(':')
+                        if len(parts) == 3:
+                            try:
+                                req_w = int(parts[1].strip())
+                                req_h = int(parts[2].strip())
+                                if hasattr(self, 'on_resolution_requested') and callable(self.on_resolution_requested):
+                                    self.on_resolution_requested(req_w, req_h)
+                            except Exception as e:
+                                logger.debug(f"Invalid resolution in handshake line '{line}': {e}")
         except (OSError, ConnectionResetError, BrokenPipeError):
             pass
         finally:

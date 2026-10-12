@@ -773,6 +773,13 @@ class OpenDisplayServer:
                 self.frame_id += 1
                 self.frame_condition.notify_all()
         self.streamer.on_frame_captured = _on_frame
+
+        def _on_resolution(w, h):
+            logger.info(f"[OpenDisplay] Client requested native resolution: {w}x{h}")
+            attach_virtual_display(width=w, height=h, refresh_rate=60)
+            force_display_topology_extend()
+        self.streamer.on_resolution_requested = _on_resolution
+
         self.streamer.start_background()
 
         # Start USB plug/unplug watcher

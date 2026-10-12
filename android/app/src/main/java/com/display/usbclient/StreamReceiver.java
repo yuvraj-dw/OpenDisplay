@@ -296,6 +296,44 @@ public class StreamReceiver extends Thread {
         }
     }
 
+    public void sendResolution(final int width, final int height) {
+        if (!isRunning || width <= 0 || height <= 0) return;
+        final String message = "res:" + width + ":" + height + "\n";
+        try {
+            if (touchExecutor != null) {
+                touchExecutor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        synchronized (outputLock) {
+                            try {
+                                if (fileOutputStream != null) {
+                                    byte[] rawPayload = message.getBytes(StandardCharsets.UTF_8);
+                                    int totalLen = 1 + rawPayload.length;
+                                    byte[] packet = new byte[4 + totalLen];
+                                    packet[0] = (byte)((totalLen >>> 24) & 0xFF);
+                                    packet[1] = (byte)((totalLen >>> 16) & 0xFF);
+                                    packet[2] = (byte)((totalLen >>> 8) & 0xFF);
+                                    packet[3] = (byte)(totalLen & 0xFF);
+                                    packet[4] = 0x04;
+                                    System.arraycopy(rawPayload, 0, packet, 5, rawPayload.length);
+                                    fileOutputStream.write(packet);
+                                    fileOutputStream.flush();
+                                } else if (activeOutputStream != null) {
+                                    byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
+                                    activeOutputStream.write(bytes);
+                                    activeOutputStream.flush();
+                                }
+                            } catch (IOException e) {
+                                Log.w(TAG, "Failed sending resolution handshake: " + e.getMessage());
+                            }
+                        }
+                    }
+                });
+            }
+        } catch (RejectedExecutionException ignored) {
+        }
+    }
+
     private void handleConfig(byte[] payload) {
         try {
             String jsonStr = new String(payload, StandardCharsets.UTF_8);

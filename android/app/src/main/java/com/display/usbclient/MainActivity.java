@@ -209,6 +209,14 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
     @Override
     public void onConnected() {
         Log.i(TAG, "StreamReceiver connected");
+        // Handshake native display resolution with host
+        try {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            if (streamReceiver != null) {
+                streamReceiver.sendResolution(dm.widthPixels, dm.heightPixels);
+            }
+        } catch (Exception ignored) {}
+
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
