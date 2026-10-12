@@ -755,7 +755,7 @@ class OpenDisplayServer:
 
         # Start native binary streamer on tcp:7070 as the sole DXCAM owner
         self.streamer = Streamer(
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=STREAM_PORT,
             display_idx=self.display_idx,
             fps=self.fps,
@@ -865,14 +865,19 @@ class OpenDisplayServer:
                                     if msg.startswith('m:'):
                                         parts = msg.split(':')
                                         if len(parts) == 4:
-                                            action, nx, ny = parts[1], float(parts[2]), float(parts[3])
-                                            tx = int(left + nx * w)
-                                            ty = int(top + ny * h)
-                                            ctypes.windll.user32.SetCursorPos(tx, ty)
-                                            if action == 'down':
-                                                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
-                                            elif action == 'up':
-                                                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                                            action = parts[1]
+                                            try:
+                                                nx = max(0.0, min(1.0, float(parts[2])))
+                                                ny = max(0.0, min(1.0, float(parts[3])))
+                                                tx = int(left + nx * w)
+                                                ty = int(top + ny * h)
+                                                ctypes.windll.user32.SetCursorPos(tx, ty)
+                                                if action == 'down':
+                                                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                                                elif action == 'up':
+                                                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                                            except (ValueError, TypeError):
+                                                pass
                         except Exception:
                             pass
 
@@ -944,8 +949,8 @@ class OpenDisplayServer:
                         parsed = urllib.parse.urlparse(self.path)
                         params = urllib.parse.parse_qs(parsed.query)
                         action = params.get("action", ["move"])[0]
-                        norm_x = float(params.get("x", [0])[0])
-                        norm_y = float(params.get("y", [0])[0])
+                        norm_x = max(0.0, min(1.0, float(params.get("x", [0])[0])))
+                        norm_y = max(0.0, min(1.0, float(params.get("y", [0])[0])))
 
                         disp = server_instance.capture.list_displays()
                         idx = server_instance.display_idx
@@ -974,7 +979,7 @@ class OpenDisplayServer:
                     self.send_response(404)
                     self.end_headers()
 
-        self.httpd = ThreadingHTTPServer(("0.0.0.0", self.port), StreamHandler)
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), StreamHandler)
         print(f"[OpenDisplay] Running in background and System Tray (http://127.0.0.1:{self.port})")
 
         try:

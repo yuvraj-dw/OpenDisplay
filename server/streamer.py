@@ -352,8 +352,8 @@ class Streamer:
             normY = norm_y
 
         try:
-            normX = float(normX)
-            normY = float(normY)
+            normX = max(0.0, min(1.0, float(normX)))
+            normY = max(0.0, min(1.0, float(normY)))
         except (ValueError, TypeError):
             normX, normY = 0.0, 0.0
 
@@ -467,8 +467,11 @@ class Streamer:
                             try:
                                 req_w = int(parts[1].strip())
                                 req_h = int(parts[2].strip())
-                                if hasattr(self, 'on_resolution_requested') and callable(self.on_resolution_requested):
-                                    self.on_resolution_requested(req_w, req_h)
+                                if (320 <= req_w <= 7680) and (240 <= req_h <= 4320):
+                                    if hasattr(self, 'on_resolution_requested') and callable(self.on_resolution_requested):
+                                        self.on_resolution_requested(req_w, req_h)
+                                else:
+                                    logger.warning(f"Resolution out of bounds ({req_w}x{req_h}), ignoring.")
                             except Exception as e:
                                 logger.debug(f"Invalid resolution in handshake line '{line}': {e}")
         except (OSError, ConnectionResetError, BrokenPipeError):
