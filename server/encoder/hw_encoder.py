@@ -315,6 +315,8 @@ class HardwareEncoder:
             return self.encode_image(frame, format='jpeg', quality=self.quality)
 
         try:
+            if not frame.flags['C_CONTIGUOUS']:
+                frame = np.ascontiguousarray(frame)
             # ponytail: zero-copy pipe write via memoryview eliminates 180MB/s of GC heap churn
             self._proc.stdin.write(memoryview(frame))
             self._proc.stdin.flush()

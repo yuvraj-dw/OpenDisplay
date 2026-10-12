@@ -517,24 +517,44 @@ class DxgiScreenCapture:
                 logger.debug(f"get_latest_frame error: {e}")
                 frame = None
             if frame is not None:
+                # Sanity check: Ensure frame resolution matches target display dimensions
+                target_disp = displays[display_idx] if display_idx < len(displays) else None
+                if target_disp:
+                    exp_w = target_disp.get('width')
+                    exp_h = target_disp.get('height')
+                    fh, fw = frame.shape[:2]
+                    if exp_w and exp_h and (fw != exp_w or fh != exp_h):
+                        logger.warning(f"DXCAM captured resolution ({fw}x{fh}) does not match expected ({exp_w}x{exp_h}). Rejecting and falling back.")
+                        frame = None
+            if frame is not None:
                 if frame.shape[2] == 4:
-                    return frame[:, :, :3]
-                return frame
+                    return np.ascontiguousarray(frame[:, :, :3])
+                return np.ascontiguousarray(frame)
         return None
 
     def _capture_mss(self, display_idx: int) -> np.ndarray | None:
-        sct = self._get_mss()
-        monitors = sct.monitors
-        if len(monitors) > 1:
-            mon_idx = display_idx + 1
-            if mon_idx >= len(monitors):
-                mon_idx = 1
-            monitor = monitors[mon_idx]
-        elif len(monitors) == 1:
-            monitor = monitors[0]
-        else:
-            return None
+        displays = self.list_displays()
+        monitor = None
+        if display_idx < len(displays):
+            d = displays[display_idx]
+            monitor = {
+                'left': int(d.get('left', 0)),
+                'top': int(d.get('top', 0)),
+                'width': int(d.get('width', 1280)),
+                'height': int(d.get('height', 800)),
+            }
+        if monitor is None:
+            sct = self._get_mss()
+            monitors = sct.monitors
+            if len(monitors) > 1:
+                mon_idx = display_idx + 1 if display_idx + 1 < len(monitors) else 1
+                monitor = monitors[mon_idx]
+            elif len(monitors) == 1:
+                monitor = monitors[0]
+            else:
+                return None
 
+        sct = self._get_mss()
         try:
             shot = sct.grab(monitor)
         except AttributeError:
@@ -545,7 +565,7 @@ class DxgiScreenCapture:
 
         # shot is BGRA
         frame = np.asarray(shot, dtype=np.uint8)
-        return frame[:, :, :3]
+        return np.ascontiguousarray(frame[:, :, :3])
 
     def _capture_gdi(self, display_idx: int) -> np.ndarray | None:
         import win32api

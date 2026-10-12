@@ -39,24 +39,25 @@ except Exception:
     except Exception:
         pass
 
-# Safe logging for windowed / no-console mode
-log_dir = os.path.join(os.environ.get("LOCALAPPDATA", os.environ.get("TEMP", os.getcwd())), "OpenDisplay")
-try:
-    os.makedirs(log_dir, exist_ok=True)
-    log_file_path = os.path.join(log_dir, "opendisplay.log")
-    log_fp = open(log_file_path, "a", encoding="utf-8", buffering=1)
-    sys.stdout = log_fp
-    sys.stderr = log_fp
-    logging.basicConfig(
-        stream=log_fp,
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    )
-except Exception:
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w")
-    if sys.stderr is None:
-        sys.stderr = open(os.devnull, "w")
+def setup_runtime_logging():
+    """Sets up runtime logging for windowed mode when executed as main executable."""
+    log_dir = os.path.join(os.environ.get("LOCALAPPDATA", os.environ.get("TEMP", os.getcwd())), "OpenDisplay")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        log_file_path = os.path.join(log_dir, "opendisplay.log")
+        log_fp = open(log_file_path, "a", encoding="utf-8", buffering=1)
+        sys.stdout = log_fp
+        sys.stderr = log_fp
+        logging.basicConfig(
+            stream=log_fp,
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        )
+    except Exception:
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, "w")
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, "w")
 
 # Hide console window if launched from cmd/batch
 try:
@@ -315,11 +316,22 @@ def enable_virtual_display():
             pass
     attach_virtual_display(width=1280, height=800, refresh_rate=60)
 
+def is_virtual_display_attached() -> bool:
+    """Checks whether the virtual display is currently attached to the Windows desktop."""
+    try:
+        for i in range(40):
+            dev = win32api.EnumDisplayDevices(None, i, 0)
+            if (dev.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) and not (dev.StateFlags & win32con.DISPLAY_DEVICE_PRIMARY_DEVICE):
+                if any(k in dev.DeviceString for k in ["Virtual", "LuminonCore", "IDDCX", "OpenDisplay"]):
+                    return True
+    except Exception:
+        pass
+    return False
+
 def disable_virtual_display():
     detach_virtual_display()
 
 align_secondary_display_bottom_left = attach_virtual_display
-atexit.register(detach_virtual_display)
 
 HTML_VIEWER = """<!DOCTYPE html>
 <html>
@@ -534,9 +546,12 @@ class USBMonitorThread(threading.Thread):
                         print("[OpenDisplay] Tablet USB plugged in! Activating 165Hz monitor...")
                         enable_virtual_display()
                         force_display_topology_extend()
-                        self.server.display_idx = self.server._resolve_target_display_idx()
+                        time.sleep(0.5)
+                        self.server.display_idx = self.server._resolve_target_display_idx(force_refresh=True)
                         if self.server.streamer:
                             self.server.streamer.display_idx = self.server.display_idx
+                            if hasattr(self.server.streamer.capture, 'list_displays'):
+                                self.server.streamer.capture.list_displays(force_refresh=True)
                         self.server.setup_usb_tunnel()
                         self.server.launch_tablet_viewer()
                         if hasattr(self.server, 'tray') and self.server.tray:
@@ -548,8 +563,18 @@ class USBMonitorThread(threading.Thread):
                             if hasattr(self.server, 'tray') and self.server.tray:
                                 self.server.tray.update_status(False)
                 elif connected:
-                    # If connected but no clients currently streaming (e.g. tablet app closed),
-                    # periodically refresh reverse tunnel so when tablet app is reopened it connects instantly
+                    # Self-healing watchdog: ensure virtual display stays attached and extended while tablet is plugged in
+                    if not is_virtual_display_attached():
+                        logger.info("[OpenDisplay] Virtual display was detached while tablet connected; re-attaching now...")
+                        enable_virtual_display()
+                        force_display_topology_extend()
+                        time.sleep(0.5)
+                        self.server.display_idx = self.server._resolve_target_display_idx(force_refresh=True)
+                        if self.server.streamer:
+                            self.server.streamer.display_idx = self.server.display_idx
+                            if hasattr(self.server.streamer.capture, 'list_displays'):
+                                self.server.streamer.capture.list_displays(force_refresh=True)
+
                     has_clients = False
                     if self.server.streamer:
                         has_clients = len(getattr(self.server.streamer, '_clients', [])) > 0
@@ -733,13 +758,17 @@ class OpenDisplayServer:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def _resolve_target_display_idx(self) -> int:
+    def _resolve_target_display_idx(self, force_refresh: bool = False) -> int:
         """Finds the virtual display index among available monitors to guarantee extending rather than mirroring."""
         try:
-            displays = self.capture.list_displays()
+            displays = self.capture.list_displays(force_refresh=force_refresh)
             if len(displays) > 1:
                 for i, d in enumerate(displays):
-                    if (d.get('width') == 1280 and d.get('height') == 800) or (d.get('left') != 0 or d.get('top') != 0):
+                    # Priority 1: non-primary display or display with offset position
+                    if not d.get('is_primary', True) or (d.get('left') != 0 or d.get('top') != 0):
+                        return i
+                    # Priority 2: display with "virtual" in name
+                    if any(k in str(d.get('name', '')) for k in ['Virtual', 'LuminonCore', 'IDDCX', '1']):
                         return i
                 return 1
         except Exception:
@@ -747,8 +776,19 @@ class OpenDisplayServer:
         return 0
 
     def start(self):
+        # Auto-enable and extend virtual display if tablet or devices attached
+        if self.adb and os.path.exists(self.adb):
+            try:
+                res = self.run_adb(["devices"], timeout=2.0)
+                if "\tdevice" in res.stdout or " device" in res.stdout:
+                    enable_virtual_display()
+                    force_display_topology_extend()
+                    time.sleep(0.5)
+            except Exception:
+                pass
+
         # Dynamically auto-resolve display index to the extended virtual monitor if available
-        self.display_idx = self._resolve_target_display_idx()
+        self.display_idx = self._resolve_target_display_idx(force_refresh=True)
 
         # Start tray icon
         self.tray = SystemTray(self)
@@ -990,6 +1030,8 @@ class OpenDisplayServer:
             self.stop()
 
 if __name__ == "__main__":
+    setup_runtime_logging()
+    atexit.register(detach_virtual_display)
     ensure_driver_installed()
     temp_cap = DxgiScreenCapture(backend="auto")
     displays = temp_cap.list_displays()

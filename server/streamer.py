@@ -216,7 +216,7 @@ class Streamer:
                 if not displays or (t0 - last_disp_check > 2.0):
                     if hasattr(self.capture, 'list_displays'):
                         try:
-                            displays = self.capture.list_displays() or []
+                            displays = self.capture.list_displays(force_refresh=True) or []
                         except Exception as e:
                             logger.debug(f"Error checking displays: {e}")
                     last_disp_check = t0
@@ -225,14 +225,27 @@ class Streamer:
                     time.sleep(0.02)
                     continue
 
+                # If tablet clients are connected but Windows has only 1 display, request re-attach
+                if len(displays) <= 1 and (self._clients or getattr(self.winusb_transport, 'is_connected', False)):
+                    now_t = time.time()
+                    if now_t - getattr(self, '_last_reattach_time', 0) > 3.0:
+                        self._last_reattach_time = now_t
+                        try:
+                            from opendisplay_server import enable_virtual_display, force_display_topology_extend
+                            enable_virtual_display()
+                            force_display_topology_extend()
+                            if hasattr(self.capture, 'list_displays'):
+                                displays = self.capture.list_displays(force_refresh=True) or []
+                        except Exception as e:
+                            logger.debug(f"Streamer re-attach notice: {e}")
+
                 idx = self.display_idx
-                # ponytail: If display_idx was initialized to 0 (default) or out-of-range, but multiple displays exist,
-                # dynamically resolve to the extended secondary monitor (1280x800 or non-primary) so we NEVER mirror Display 0.
+                # Dynamically resolve to the extended secondary monitor (never mirror Display 0)
                 if len(displays) > 1:
                     target_candidate = None
                     for i, d in enumerate(displays):
-                        # Match 1280x800 tablet virtual display resolution or offset position
-                        if (d.get('width') == 1280 and d.get('height') == 800) or (d.get('left') != 0 or d.get('top') != 0):
+                        # Match non-primary monitor, or non-zero coordinate offset, or virtual naming
+                        if not d.get('is_primary', True) or (d.get('left') != 0 or d.get('top') != 0) or any(k in str(d.get('name', '')) for k in ['Virtual', 'LuminonCore', 'IDDCX', '1']):
                             target_candidate = i
                             break
                     if target_candidate is not None:
