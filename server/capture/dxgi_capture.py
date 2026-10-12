@@ -259,6 +259,17 @@ class DxgiScreenCapture:
                     'device_idx': out['device_idx'],
                     'output_idx': out['output_idx'],
                 })
+
+        # If MSS detects more displays than DXCAM (e.g. Virtual Display / IddCx driver without DXGI output),
+        # include the additional displays so streamer can capture them via fallback (MSS/GDI)
+        if len(mss_displays) > len(displays):
+            for extra_idx in range(len(displays), len(mss_displays)):
+                d = dict(mss_displays[extra_idx])
+                d['id'] = extra_idx
+                # Mark as non-DXCAM so capture knows to use MSS/GDI
+                d['is_virtual_fallback'] = True
+                displays.append(d)
+
         return displays if displays else self._list_displays_headless()
 
     def _list_displays_mss(self) -> list[dict[str, Any]]:
@@ -327,20 +338,23 @@ class DxgiScreenCapture:
             raise IndexError(f"Display index {display_idx} out of range (total {len(displays)})")
 
         frame = None
-        if self.backend == 'dxcam':
+        target_display = displays[display_idx] if display_idx < len(displays) else None
+        is_virtual = target_display.get('is_virtual_fallback', False) if target_display else False
+
+        if self.backend == 'dxcam' and not is_virtual:
             try:
                 frame = self._capture_dxcam(display_idx)
             except Exception as e:
                 logger.warning(f"dxcam capture failed: {e}")
 
-        # Only fallback to MSS if backend is not dxcam or if dxcam had an unrecoverable failure
-        if frame is None and self.backend != 'dxcam' and (self.backend == 'mss' or self._sct is not None):
+        # Fallback to MSS if backend is not dxcam, or if targeting a virtual display without DXGI output, or if dxcam had an error
+        if frame is None and (self.backend != 'dxcam' or is_virtual or getattr(self, '_dxcam_camera', None) is None) and (self.backend == 'mss' or is_virtual or self._sct is not None):
             try:
                 frame = self._capture_mss(display_idx)
             except Exception as e:
                 logger.warning(f"mss capture failed: {e}")
 
-        if frame is None and self.backend == 'gdi':
+        if frame is None and (self.backend == 'gdi' or is_virtual):
             try:
                 frame = self._capture_gdi(display_idx)
             except Exception as e:

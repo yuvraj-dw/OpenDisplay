@@ -55,23 +55,11 @@ if (-not $javacCmd) {
     $javaCmd = Join-Path $jdkDir "bin\java.exe"
 }
 
-Write-Host "[5/5] Compiling and Packaging OpenDisplay.apk..."
-$classesDir = Join-Path $toolsDir "classes"
-Remove-Item $classesDir -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $classesDir -Force | Out-Null
+# 4.5. Generate R.java and link APK via AAPT2
+$rJavaDir = Join-Path $toolsDir "gen"
+Remove-Item $rJavaDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $rJavaDir -Force | Out-Null
 
-# Compile Java sources
-$javaFiles = Get-ChildItem "$androidSrc\java\com\display\usbclient\*.java" | ForEach-Object { $_.FullName }
-& $javacCmd -cp $androidJar -d $classesDir -source 8 -target 8 $javaFiles
-
-# Compile classes to classes.dex with D8
-$dexDir = Join-Path $toolsDir "dex"
-Remove-Item $dexDir -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $dexDir -Force | Out-Null
-$compiledClasses = Get-ChildItem "$classesDir\com\display\usbclient\*.class" | ForEach-Object { $_.FullName }
-& $javaCmd -cp $r8Jar com.android.tools.r8.D8 --lib $androidJar --output $dexDir --min-api 26 $compiledClasses
-
-# Compile Android resources and link APK with AAPT2
 $manifestXml = Join-Path $androidSrc "AndroidManifest.xml"
 $compiledRes = Join-Path $toolsDir "compiled_res.zip"
 Remove-Item $compiledRes -Force -ErrorAction SilentlyContinue
@@ -81,7 +69,23 @@ $compiledApk = Join-Path $outDir "OpenDisplay_unaligned.apk"
 $finalApk = Join-Path $rootDir "OpenDisplay.apk"
 Remove-Item $compiledApk, $finalApk -Force -ErrorAction SilentlyContinue
 
-& $aaptExe link -I $androidJar -R $compiledRes --min-sdk-version 26 --target-sdk-version 30 --manifest $manifestXml -o $compiledApk --auto-add-overlay
+& $aaptExe link -I $androidJar -R $compiledRes --min-sdk-version 26 --target-sdk-version 30 --manifest $manifestXml --java $rJavaDir -o $compiledApk --auto-add-overlay
+
+Write-Host "[5/5] Compiling and Packaging OpenDisplay.apk..."
+$classesDir = Join-Path $toolsDir "classes"
+Remove-Item $classesDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $classesDir -Force | Out-Null
+
+# Compile Java sources including generated R.java
+$javaFiles = Get-ChildItem "$androidSrc\java\com\display\usbclient\*.java", "$rJavaDir\com\display\usbclient\*.java" | ForEach-Object { $_.FullName }
+& $javacCmd -cp $androidJar -d $classesDir -source 8 -target 8 $javaFiles
+
+# Compile classes to classes.dex with D8
+$dexDir = Join-Path $toolsDir "dex"
+Remove-Item $dexDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $dexDir -Force | Out-Null
+$compiledClasses = Get-ChildItem "$classesDir\com\display\usbclient\*.class" | ForEach-Object { $_.FullName }
+& $javaCmd -cp $r8Jar com.android.tools.r8.D8 --lib $androidJar --output $dexDir --min-api 26 $compiledClasses
 
 # Add classes.dex into APK
 & "C:\Program Files\7-Zip\7z.exe" a -tzip $compiledApk (Join-Path $dexDir "classes.dex") | Out-Null

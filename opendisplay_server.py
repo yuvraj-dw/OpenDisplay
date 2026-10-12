@@ -123,6 +123,19 @@ def detach_virtual_display():
     except Exception as e:
         print(f"[OpenDisplay] Detach notice: {e}")
 
+def force_display_topology_extend():
+    """Forces Windows to extend the desktop to all active displays rather than mirroring/cloning."""
+    try:
+        SDC_APPLY = 0x00000080
+        SDC_TOPOLOGY_EXTEND = 0x00000004
+        res = ctypes.windll.user32.SetDisplayConfig(0, None, 0, None, SDC_APPLY | SDC_TOPOLOGY_EXTEND)
+        if res == 0:
+            logger.info("[OpenDisplay] Enforced Windows display topology: EXTEND.")
+            return True
+    except Exception as e:
+        logger.debug(f"[OpenDisplay] Notice enforcing topology: {e}")
+    return False
+
 def attach_virtual_display(width=1280, height=800, refresh_rate=60):
     """Attaches and positions the virtual display without requiring UAC/admin."""
     try:
@@ -179,6 +192,10 @@ def attach_virtual_display(width=1280, height=800, refresh_rate=60):
             dm.Fields = win32con.DM_PELSWIDTH | win32con.DM_PELSHEIGHT | win32con.DM_POSITION | win32con.DM_DISPLAYFREQUENCY
             win32api.ChangeDisplaySettingsEx(target_dev.DeviceName, dm, win32con.CDS_UPDATEREGISTRY | win32con.CDS_NORESET)
             win32api.ChangeDisplaySettingsEx(None, None, 0)
+            
+            # Enforce desktop extension so Windows never clones/duplicates primary screen onto virtual screen
+            force_display_topology_extend()
+            
             print(f"[OpenDisplay] Attached virtual display ({target_dev.DeviceName}) at bottom-left ({target_x}, {target_y}) @ {refresh_rate}Hz")
     except Exception as e:
         print(f"[OpenDisplay] Attach notice: {e}")
@@ -414,6 +431,7 @@ class USBMonitorThread(threading.Thread):
                     if connected:
                         print("[OpenDisplay] Tablet USB plugged in! Activating 165Hz monitor...")
                         enable_virtual_display()
+                        force_display_topology_extend()
                         self.server.display_idx = self.server._resolve_target_display_idx()
                         if self.server.streamer:
                             self.server.streamer.display_idx = self.server.display_idx

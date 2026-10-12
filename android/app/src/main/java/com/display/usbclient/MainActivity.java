@@ -26,8 +26,13 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
     private static final int STREAM_PORT = 7070;
 
     private SurfaceView surfaceView;
+    private View idleLayout;
+    private android.widget.TextView statusText;
+    private android.widget.ProgressBar statusSpinner;
+    private android.widget.TextView deviceInfoText;
     private H264Decoder decoder;
     private StreamReceiver streamReceiver;
+    private boolean isStreamingActive = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -36,7 +41,15 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         enableFullscreenImmersive();
 
-        surfaceView = new SurfaceView(this);
+        setContentView(R.layout.activity_main);
+        surfaceView = findViewById(R.id.surface_view);
+        idleLayout = findViewById(R.id.idle_layout);
+        statusText = findViewById(R.id.status_text);
+        statusSpinner = findViewById(R.id.status_spinner);
+        deviceInfoText = findViewById(R.id.device_info_text);
+
+        updateDeviceInfo();
+
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
@@ -98,8 +111,21 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                 }
             }
         });
+    }
 
-        setContentView(surfaceView);
+    private void updateDeviceInfo() {
+        if (deviceInfoText != null) {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int w = dm.widthPixels;
+            int h = dm.heightPixels;
+            int refreshRate = 60;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    refreshRate = (int) getDisplay().getRefreshRate();
+                } catch (Exception ignored) {}
+            }
+            deviceInfoText.setText(String.format("Device Display: %d x %d @ %dHz | Ready", w, h, refreshRate));
+        }
     }
 
     @Override
@@ -183,11 +209,49 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
     @Override
     public void onConnected() {
         Log.i(TAG, "StreamReceiver connected");
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (statusText != null) {
+                    statusText.setText(R.string.status_connected);
+                }
+                if (statusSpinner != null) {
+                    statusSpinner.setVisibility(View.GONE);
+                }
+                // Transition to hardware surface view
+                if (idleLayout != null) {
+                    idleLayout.setVisibility(View.GONE);
+                }
+                if (surfaceView != null) {
+                    surfaceView.setVisibility(View.VISIBLE);
+                }
+                isStreamingActive = true;
+            }
+        });
     }
 
     @Override
     public void onDisconnected() {
         Log.i(TAG, "StreamReceiver disconnected");
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                isStreamingActive = false;
+                if (statusText != null) {
+                    statusText.setText(R.string.status_reconnecting);
+                }
+                if (statusSpinner != null) {
+                    statusSpinner.setVisibility(View.VISIBLE);
+                }
+                // Restore idle dashboard over surface
+                if (surfaceView != null) {
+                    surfaceView.setVisibility(View.GONE);
+                }
+                if (idleLayout != null) {
+                    idleLayout.setVisibility(View.VISIBLE);
+                }
+            }
+        });
     }
 
     @Override
@@ -233,7 +297,8 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
 
     private synchronized void checkAndRestartPipeline() {
         if (surfaceView != null) {
-            Surface surface = surfaceView.getHolder().getSurface();
+            SurfaceHolder holder = surfaceView.getHolder();
+            Surface surface = holder != null ? holder.getSurface() : null;
             if (surface != null && surface.isValid()) {
                 if (decoder == null || streamReceiver == null || !streamReceiver.isAlive()) {
                     Log.i(TAG, "checkAndRestartPipeline: Valid surface with inactive pipeline. Reconnecting...");
@@ -245,7 +310,11 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                         Log.e(TAG, "Failed reconnecting pipeline: " + e.getMessage(), e);
                     }
                 }
+            } else if (streamReceiver == null || !streamReceiver.isAlive()) {
+                initReceiver();
             }
+        } else if (streamReceiver == null || !streamReceiver.isAlive()) {
+            initReceiver();
         }
     }
 
