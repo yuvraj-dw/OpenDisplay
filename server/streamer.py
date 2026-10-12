@@ -476,13 +476,14 @@ class Streamer:
                                 logger.debug(f"Invalid float in mouse event line '{line}': {e}")
                     elif line.startswith('res:'):
                         parts = line.split(':')
-                        if len(parts) == 3:
+                        if len(parts) >= 3:
                             try:
                                 req_w = int(parts[1].strip())
                                 req_h = int(parts[2].strip())
+                                req_fps = int(parts[3].strip()) if len(parts) >= 4 else 60
                                 if (320 <= req_w <= 7680) and (240 <= req_h <= 4320):
                                     if hasattr(self, 'on_resolution_requested') and callable(self.on_resolution_requested):
-                                        self.on_resolution_requested(req_w, req_h)
+                                        self.on_resolution_requested(req_w, req_h, req_fps)
                                 else:
                                     logger.warning(f"Resolution out of bounds ({req_w}x{req_h}), ignoring.")
                             except Exception as e:

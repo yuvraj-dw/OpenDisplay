@@ -133,17 +133,27 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
         return new android.graphics.Point(w, h);
     }
 
+    private int getDisplayRefreshRate() {
+        int rate = 60;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                rate = (int) getDisplay().getRefreshRate();
+            } else {
+                WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+                if (wm != null) {
+                    rate = (int) wm.getDefaultDisplay().getRefreshRate();
+                }
+            }
+        } catch (Exception ignored) {}
+        return (rate >= 30 && rate <= 240) ? rate : 60;
+    }
+
     private void updateDeviceInfo() {
         if (deviceInfoText != null) {
             android.graphics.Point screen = getPhysicalScreenSize();
             int w = screen.x;
             int h = screen.y;
-            int refreshRate = 60;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                try {
-                    refreshRate = (int) getDisplay().getRefreshRate();
-                } catch (Exception ignored) {}
-            }
+            int refreshRate = getDisplayRefreshRate();
             deviceInfoText.setText(String.format("Device Display: %d x %d @ %dHz | Ready", w, h, refreshRate));
         }
     }
@@ -229,11 +239,12 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
     @Override
     public void onConnected() {
         Log.i(TAG, "StreamReceiver connected");
-        // Handshake physical display resolution with host
+        // Handshake physical display resolution and refresh rate with host
         try {
             android.graphics.Point screen = getPhysicalScreenSize();
+            int hz = getDisplayRefreshRate();
             if (streamReceiver != null) {
-                streamReceiver.sendResolution(screen.x, screen.y);
+                streamReceiver.sendResolution(screen.x, screen.y, hz);
             }
         } catch (Exception ignored) {}
 

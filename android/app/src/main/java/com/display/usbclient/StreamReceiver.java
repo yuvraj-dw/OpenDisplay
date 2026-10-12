@@ -297,8 +297,13 @@ public class StreamReceiver extends Thread {
     }
 
     public void sendResolution(final int width, final int height) {
+        sendResolution(width, height, 60);
+    }
+
+    public void sendResolution(final int width, final int height, final int fps) {
         if (!isRunning || width <= 0 || height <= 0) return;
-        final String message = "res:" + width + ":" + height + "\n";
+        final int targetFps = (fps >= 30 && fps <= 240) ? fps : 60;
+        final String message = "res:" + width + ":" + height + ":" + targetFps + "\n";
         try {
             if (touchExecutor != null) {
                 touchExecutor.execute(new Runnable() {

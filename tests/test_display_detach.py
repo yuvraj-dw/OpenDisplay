@@ -37,17 +37,18 @@ class TestVirtualDisplayAttachDetach(unittest.TestCase):
         )
         mock_change.assert_any_call(None, None, 0)
 
+    @patch('opendisplay_server.find_closest_supported_mode', return_value=(1280, 800))
     @patch('win32api.EnumDisplayDevices')
     @patch('win32api.EnumDisplaySettings')
     @patch('win32api.ChangeDisplaySettingsEx')
-    def test_attach_virtual_display_positions_monitor(self, mock_change, mock_settings, mock_devices):
+    def test_attach_virtual_display_positions_monitor(self, mock_change, mock_settings, mock_devices, mock_find_mode):
         dev_primary = MagicMock()
-        dev_primary.DeviceName = r"\\.\DISPLAY1"
+        dev_primary.DeviceName = r"\.\DISPLAY1"
         dev_primary.DeviceString = "Intel(R) UHD Graphics"
         dev_primary.StateFlags = win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP | win32con.DISPLAY_DEVICE_PRIMARY_DEVICE
 
         dev_virtual = MagicMock()
-        dev_virtual.DeviceName = r"\\.\DISPLAY25"
+        dev_virtual.DeviceName = r"\.\DISPLAY25"
         dev_virtual.DeviceString = "Virtual Display Driver"
         dev_virtual.StateFlags = 0  # Detached
 
@@ -58,21 +59,21 @@ class TestVirtualDisplayAttachDetach(unittest.TestCase):
         dm_virtual = MagicMock()
 
         def mock_enum_settings(dev_name, mode):
-            if dev_name == r"\\.\DISPLAY1":
+            if dev_name == r"\.\DISPLAY1":
                 return dm_primary
             return dm_virtual
 
         mock_settings.side_effect = mock_enum_settings
 
-        attach_virtual_display(width=1280, height=800, refresh_rate=165)
+        attach_virtual_display(width=1280, height=800, refresh_rate=60)
 
         self.assertEqual(dm_virtual.PelsWidth, 1280)
         self.assertEqual(dm_virtual.PelsHeight, 800)
         self.assertEqual(dm_virtual.Position_x, -1280)
         self.assertEqual(dm_virtual.Position_y, 280)
-        self.assertEqual(dm_virtual.DisplayFrequency, 165)
+        self.assertEqual(dm_virtual.DisplayFrequency, 60)
         mock_change.assert_any_call(
-            r"\\.\DISPLAY25", dm_virtual, win32con.CDS_UPDATEREGISTRY | win32con.CDS_NORESET
+            r"\.\DISPLAY25", dm_virtual, win32con.CDS_UPDATEREGISTRY | win32con.CDS_NORESET
         )
         mock_change.assert_any_call(None, None, 0)
 

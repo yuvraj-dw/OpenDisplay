@@ -245,8 +245,10 @@ def find_closest_supported_mode(device_name: str, target_w: int, target_h: int) 
     for i in range(150):
         try:
             dm = win32api.EnumDisplaySettings(device_name, i)
-            if dm.PelsWidth and dm.PelsHeight:
-                supported.append((dm.PelsWidth, dm.PelsHeight))
+            pw = getattr(dm, 'PelsWidth', None)
+            ph = getattr(dm, 'PelsHeight', None)
+            if isinstance(pw, int) and isinstance(ph, int) and pw > 0 and ph > 0:
+                supported.append((pw, ph))
         except Exception:
             break
     if not supported:
@@ -343,7 +345,7 @@ def enable_virtual_display():
                 time.sleep(1.0)
         except Exception:
             pass
-    attach_virtual_display(width=1280, height=800, refresh_rate=60)
+    attach_virtual_display()
 
 def is_virtual_display_attached() -> bool:
     """Checks whether the virtual display is currently attached to the Windows desktop."""
@@ -385,6 +387,7 @@ HTML_VIEWER = """<!DOCTYPE html>
         const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
         let ws = null;
         let busy = false;
+        let configReceived = false;
 
         function connect() {
             const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -392,6 +395,19 @@ HTML_VIEWER = """<!DOCTYPE html>
             ws.binaryType = 'arraybuffer';
 
             ws.onmessage = function(event) {
+                // Check for JSON config message
+                if (!configReceived && event.data instanceof ArrayBuffer && event.data.byteLength < 512) {
+                    try {
+                        var txt = new TextDecoder().decode(event.data);
+                        var cfg = JSON.parse(txt);
+                        if (cfg.width && cfg.height) {
+                            canvas.width = cfg.width;
+                            canvas.height = cfg.height;
+                            configReceived = true;
+                            return;
+                        }
+                    } catch(e) {}
+                }
                 // Drop in-flight frame if tablet GPU is still rendering previous (Zero Lag/Bufferbloat)
                 if (busy) return;
                 busy = true;
@@ -443,13 +459,21 @@ class SystemTray:
         self.server = server_instance
         self.hwnd = None
         self.is_connected = False
+        self.current_resolution = (1280, 800)
+        self.current_fps = getattr(server_instance, 'fps', 60)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def update_status(self, connected: bool):
+    def update_status(self, connected: bool, width: int = None, height: int = None, hz: int = None):
         self.is_connected = connected
+        if width and height:
+            self.current_resolution = (width, height)
+        if hz:
+            self.current_fps = hz
         if self.hwnd:
-            tip = f"OpenDisplay - {'Connected (165Hz)' if connected else 'Waiting for USB...'}"
+            w, h = self.current_resolution
+            rate = self.current_fps
+            tip = f"OpenDisplay - Connected ({w}x{h} @ {rate}Hz)" if connected else "OpenDisplay - Waiting for USB..."
             nid = (self.hwnd, 0, win32gui.NIF_TIP, 0, 0, tip)
             win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, nid)
 
@@ -488,7 +512,7 @@ class SystemTray:
             icon = win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
 
         nid = (self.hwnd, 0, win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
-               msg_tray, icon, "OpenDisplay - 165Hz Extended Monitor")
+               msg_tray, icon, "OpenDisplay - Extended Monitor")
         win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, nid)
 
         win32gui.PumpMessages()
@@ -506,8 +530,10 @@ class SystemTray:
         if msg == win32con.WM_USER + 20:
             if lparam == win32con.WM_RBUTTONUP or lparam == win32con.WM_CONTEXTMENU:
                 menu = win32gui.CreatePopupMenu()
-                status_txt = "Status: USB Connected (165Hz)" if self.is_connected else "Status: Waiting for USB..."
-                win32gui.AppendMenu(menu, win32con.MF_STRING | win32con.MF_GRAYED, 1001, "OpenDisplay (165Hz Monitor)")
+                w, h = getattr(self, 'current_resolution', (1280, 800))
+                hz = getattr(self, 'current_fps', 60)
+                status_txt = f"Status: USB Connected ({w}x{h} @ {hz}Hz)" if self.is_connected else "Status: Waiting for USB..."
+                win32gui.AppendMenu(menu, win32con.MF_STRING | win32con.MF_GRAYED, 1001, "OpenDisplay - Extended Display")
                 win32gui.AppendMenu(menu, win32con.MF_STRING | win32con.MF_GRAYED, 1002, status_txt)
                 win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
                 win32gui.AppendMenu(menu, win32con.MF_STRING, 1003, "Open Tablet Viewer (Browser)")
@@ -553,10 +579,20 @@ class USBMonitorThread(threading.Thread):
                                 enable_virtual_display()
                                 fps = getattr(self.server, 'fps', 60)
                                 fps_val = fps if isinstance(fps, (int, float)) else 60
-                                config_payload = json.dumps({"width": 1280, "height": 800, "fps": fps_val}).encode('utf-8')
+                                # Query actual virtual display dimensions for WinUSB config handshake
+                                cfg_w, cfg_h = 1280, 800
+                                try:
+                                    disp = self.server.capture.list_displays() if hasattr(self.server, 'capture') else []
+                                    idx = getattr(self.server, 'display_idx', 0)
+                                    if disp and 0 <= idx < len(disp):
+                                        cfg_w = disp[idx].get('width', cfg_w)
+                                        cfg_h = disp[idx].get('height', cfg_h)
+                                except Exception:
+                                    pass
+                                config_payload = json.dumps({"width": cfg_w, "height": cfg_h, "fps": fps_val}).encode('utf-8')
                                 self.server.winusb.send_packet(1, config_payload)  # MSG_CONFIG = 1
                                 if hasattr(self.server, 'tray') and self.server.tray:
-                                    self.server.tray.update_status(True)
+                                    self.server.tray.update_status(True, width=cfg_w, height=cfg_h, hz=fps_val)
 
                 adb = self.server.adb
                 connected = False
@@ -572,7 +608,7 @@ class USBMonitorThread(threading.Thread):
                 if connected != self.last_connected:
                     self.last_connected = connected
                     if connected:
-                        print("[OpenDisplay] Tablet USB plugged in! Activating 165Hz monitor...")
+                        print("[OpenDisplay] Tablet USB plugged in! Activating secondary monitor...")
                         enable_virtual_display()
                         force_display_topology_extend()
                         time.sleep(0.5)
@@ -584,7 +620,13 @@ class USBMonitorThread(threading.Thread):
                         self.server.setup_usb_tunnel()
                         self.server.launch_tablet_viewer()
                         if hasattr(self.server, 'tray') and self.server.tray:
-                            self.server.tray.update_status(True)
+                            disp = self.server.capture.list_displays()
+                            idx = self.server.display_idx
+                            d = disp[idx] if idx < len(disp) else {}
+                            w = d.get('width', 1280)
+                            h = d.get('height', 800)
+                            hz = getattr(self.server, 'fps', 60)
+                            self.server.tray.update_status(True, width=w, height=h, hz=hz)
                     else:
                         if self.last_connected is not None:
                             print("[OpenDisplay] Tablet USB unplugged.")
@@ -843,10 +885,12 @@ class OpenDisplayServer:
                 self.frame_condition.notify_all()
         self.streamer.on_frame_captured = _on_frame
 
-        def _on_resolution(w, h):
-            logger.info(f"[OpenDisplay] Client requested native resolution: {w}x{h}")
-            attach_virtual_display(width=w, height=h, refresh_rate=60)
+        def _on_resolution(w, h, hz=60):
+            logger.info(f"[OpenDisplay] Client requested native resolution: {w}x{h} @ {hz}Hz")
+            attach_virtual_display(width=w, height=h, refresh_rate=hz)
             force_display_topology_extend()
+            if self.tray:
+                self.tray.update_status(True, width=w, height=h, hz=hz)
         self.streamer.on_resolution_requested = _on_resolution
 
         self.streamer.start_background()
