@@ -239,6 +239,33 @@ def force_display_topology_extend():
         logger.debug(f"[OpenDisplay] Notice enforcing topology: {e}")
     return False
 
+def find_closest_supported_mode(device_name: str, target_w: int, target_h: int) -> tuple[int, int]:
+    """Finds the best matching resolution supported by the driver for the target tablet."""
+    supported = []
+    for i in range(150):
+        try:
+            dm = win32api.EnumDisplaySettings(device_name, i)
+            if dm.PelsWidth and dm.PelsHeight:
+                supported.append((dm.PelsWidth, dm.PelsHeight))
+        except Exception:
+            break
+    if not supported:
+        return (target_w, target_h)
+    
+    if (target_w, target_h) in supported:
+        return (target_w, target_h)
+    
+    target_aspect = target_w / max(1, target_h)
+    def score(mode):
+        w, h = mode
+        aspect = w / max(1, h)
+        aspect_diff = abs(aspect - target_aspect)
+        size_diff = abs((w * h) - (target_w * target_h))
+        return (round(aspect_diff, 2), size_diff)
+
+    best = min(supported, key=score)
+    return best
+
 def attach_virtual_display(width=1280, height=800, refresh_rate=60):
     """Attaches and positions the virtual display without requiring UAC/admin."""
     try:
@@ -253,8 +280,6 @@ def attach_virtual_display(width=1280, height=800, refresh_rate=60):
             except Exception:
                 pass
 
-        target_x = -width
-        target_y = primary_height - height
         target_dev = None
 
         # Look specifically for "Virtual Display Driver" first
@@ -279,6 +304,10 @@ def attach_virtual_display(width=1280, height=800, refresh_rate=60):
                     pass
 
         if target_dev:
+            width, height = find_closest_supported_mode(target_dev.DeviceName, width, height)
+            target_x = -width
+            target_y = primary_height - height
+
             try:
                 dm = win32api.EnumDisplaySettings(target_dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
             except Exception:
@@ -299,7 +328,7 @@ def attach_virtual_display(width=1280, height=800, refresh_rate=60):
             # Enforce desktop extension so Windows never clones/duplicates primary screen onto virtual screen
             force_display_topology_extend()
             
-            print(f"[OpenDisplay] Attached virtual display ({target_dev.DeviceName}) at bottom-left ({target_x}, {target_y}) @ {refresh_rate}Hz")
+            print(f"[OpenDisplay] Attached virtual display ({target_dev.DeviceName}) at bottom-left ({target_x}, {target_y}) @ {width}x{height} {refresh_rate}Hz")
     except Exception as e:
         print(f"[OpenDisplay] Attach notice: {e}")
 

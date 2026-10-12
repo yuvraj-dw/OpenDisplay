@@ -56,7 +56,8 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                 Log.i(TAG, "Surface created, initializing H264Decoder and StreamReceiver");
                 stopPipeline();
                 try {
-                    decoder = new H264Decoder(holder.getSurface(), 1280, 800);
+                    android.graphics.Point screen = getPhysicalScreenSize();
+                    decoder = new H264Decoder(holder.getSurface(), screen.x, screen.y);
                     initReceiver();
                 } catch (Exception e) {
                     Log.e(TAG, "Failed initializing decoder or receiver: " + e.getMessage(), e);
@@ -113,11 +114,30 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
         });
     }
 
+    private android.graphics.Point getPhysicalScreenSize() {
+        android.graphics.Point size = new android.graphics.Point();
+        try {
+            WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+            if (wm != null) {
+                android.view.Display display = wm.getDefaultDisplay();
+                display.getRealSize(size);
+            }
+        } catch (Exception ignored) {}
+        if (size.x <= 0 || size.y <= 0) {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            size.x = dm.widthPixels;
+            size.y = dm.heightPixels;
+        }
+        int w = Math.max(size.x, size.y);
+        int h = Math.min(size.x, size.y);
+        return new android.graphics.Point(w, h);
+    }
+
     private void updateDeviceInfo() {
         if (deviceInfoText != null) {
-            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            int w = dm.widthPixels;
-            int h = dm.heightPixels;
+            android.graphics.Point screen = getPhysicalScreenSize();
+            int w = screen.x;
+            int h = screen.y;
             int refreshRate = 60;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
@@ -209,11 +229,11 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
     @Override
     public void onConnected() {
         Log.i(TAG, "StreamReceiver connected");
-        // Handshake native display resolution with host
+        // Handshake physical display resolution with host
         try {
-            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            android.graphics.Point screen = getPhysicalScreenSize();
             if (streamReceiver != null) {
-                streamReceiver.sendResolution(dm.widthPixels, dm.heightPixels);
+                streamReceiver.sendResolution(screen.x, screen.y);
             }
         } catch (Exception ignored) {}
 
@@ -306,7 +326,8 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                     Log.i(TAG, "checkAndRestartPipeline: Valid surface with inactive pipeline. Reconnecting...");
                     stopPipeline();
                     try {
-                        decoder = new H264Decoder(surface, 1280, 800);
+                        android.graphics.Point screen = getPhysicalScreenSize();
+                        decoder = new H264Decoder(surface, screen.x, screen.y);
                         initReceiver();
                     } catch (Exception e) {
                         Log.e(TAG, "Failed reconnecting pipeline: " + e.getMessage(), e);
