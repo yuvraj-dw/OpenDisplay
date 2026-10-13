@@ -225,8 +225,8 @@ class Streamer:
                     time.sleep(0.02)
                     continue
 
-                # If tablet clients are connected but Windows has only 1 display, request re-attach
-                if len(displays) <= 1 and (self._clients or getattr(self.winusb_transport, 'is_connected', False)):
+                # If tablet clients are connected but Windows has only 1 display, request re-attach (skip in headless test mode)
+                if getattr(self.capture, 'backend', None) != 'headless' and len(displays) <= 1 and (self._clients or getattr(self.winusb_transport, 'is_connected', False)):
                     now_t = time.time()
                     if now_t - getattr(self, '_last_reattach_time', 0) > 3.0:
                         self._last_reattach_time = now_t
@@ -253,6 +253,12 @@ class Streamer:
                     elif idx >= len(displays) or idx == 0:
                         idx = 1
                 else:
+                    # Only 1 display detected (Primary display 0)
+                    # When a tablet or client is connected on real hardware (dxcam), NEVER capture and mirror Display 0!
+                    if getattr(self.capture, 'backend', None) == 'dxcam' and (self._clients or getattr(self.winusb_transport, 'is_connected', False)):
+                        time.sleep(0.05)
+                        displays = self.capture.list_displays(force_refresh=True) or []
+                        continue
                     if idx >= len(displays):
                         idx = len(displays) - 1
                     if idx < 0:

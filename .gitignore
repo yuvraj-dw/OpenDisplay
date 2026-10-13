@@ -32,10 +32,13 @@ venv/
 env/
 *.log
 *.png
+*.svg
+build_icons.py
 .superpowers/
 docs/
 release_staging/
 *.zip
+promo/
 
 # Third-party reverse engineering binaries
 SuperDisplay*

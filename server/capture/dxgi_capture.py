@@ -187,7 +187,7 @@ class DxgiScreenCapture:
         displays = []
         if self.backend == 'dxcam':
             try:
-                displays = self._list_displays_dxcam()
+                displays = self._list_displays_dxcam(force_refresh=force_refresh)
             except Exception as e:
                 logger.warning(f"Error listing displays with dxcam: {e}")
 
@@ -235,30 +235,52 @@ class DxgiScreenCapture:
             logger.debug(f"Failed parsing dxcam output info: {e}")
             return []
 
-    def _list_displays_dxcam(self) -> list[dict[str, Any]]:
+    def _list_displays_dxcam(self, force_refresh: bool = False) -> list[dict[str, Any]]:
         import dxcam  # type: ignore
+
+        if force_refresh:
+            try:
+                if hasattr(dxcam, 'Singleton') and hasattr(dxcam, 'DXFactory'):
+                    if dxcam.DXFactory in dxcam.Singleton._instances:
+                        del dxcam.Singleton._instances[dxcam.DXFactory]
+                    dxcam.__dict__['__factory'] = dxcam.DXFactory()
+            except Exception as e:
+                logger.debug(f"Notice refreshing dxcam factory: {e}")
 
         dxcam_outs = self._parse_dxcam_outputs()
         mss_displays = self._list_displays_mss()
         displays = []
+        used_mss_indices = set()
+
         for idx, out in enumerate(dxcam_outs):
-            if idx < len(mss_displays):
-                d = dict(mss_displays[idx])
-                d['id'] = idx
-                d['device_idx'] = out['device_idx']
-                d['output_idx'] = out['output_idx']
-                displays.append(d)
-            else:
-                displays.append({
-                    'id': idx,
-                    'name': f"Display {idx}",
-                    'width': out['width'],
-                    'height': out['height'],
-                    'left': -out['width'] if idx > 0 else 0,
-                    'top': 0,
-                    'device_idx': out['device_idx'],
-                    'output_idx': out['output_idx'],
-                })
+            # Try to match DXCAM output to MSS display by exact resolution and primary flag
+            matched_m = None
+            for m_idx, m in enumerate(mss_displays):
+                if m_idx in used_mss_indices:
+                    continue
+                if m['width'] == out['width'] and m['height'] == out['height']:
+                    is_p = (m.get('left', 0) == 0 and m.get('top', 0) == 0)
+                    if out['is_primary'] == is_p or matched_m is None:
+                        matched_m = m
+                        used_mss_indices.add(m_idx)
+                        break
+
+            if matched_m is None and idx < len(mss_displays) and idx not in used_mss_indices:
+                matched_m = mss_displays[idx]
+                used_mss_indices.add(idx)
+
+            d = {
+                'id': idx,
+                'name': f"Display {idx}",
+                'width': out['width'],
+                'height': out['height'],
+                'left': matched_m['left'] if matched_m else (-out['width'] if not out['is_primary'] else 0),
+                'top': matched_m['top'] if matched_m else 0,
+                'device_idx': out['device_idx'],
+                'output_idx': out['output_idx'],
+                'is_primary': out['is_primary'],
+            }
+            displays.append(d)
 
         # If MSS detects more displays than DXCAM (e.g. Virtual Display / IddCx driver without DXGI output),
         # include the additional displays so streamer can capture them via fallback (MSS/GDI)
@@ -347,8 +369,8 @@ class DxgiScreenCapture:
             except Exception as e:
                 logger.warning(f"dxcam capture failed: {e}")
 
-        # Fallback to MSS if backend is not dxcam, or if targeting a virtual display without DXGI output, or if dxcam had an error
-        if frame is None and (self.backend != 'dxcam' or is_virtual or getattr(self, '_dxcam_camera', None) is None) and (self.backend == 'mss' or is_virtual or self._sct is not None):
+        # Fallback to MSS if dxcam produced no frame, or if targeting a virtual display without DXGI output
+        if frame is None and (self.backend in ('dxcam', 'mss') or is_virtual or self._sct is not None):
             try:
                 frame = self._capture_mss(display_idx)
             except Exception as e:
@@ -477,6 +499,21 @@ class DxgiScreenCapture:
             pass
         return frame
 
+    def _get_primary_device_names(self) -> list[str]:
+        names = []
+        try:
+            import win32api, win32con
+            for i in range(20):
+                try:
+                    dev = win32api.EnumDisplayDevices(None, i, 0)
+                    if (dev.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) and (dev.StateFlags & win32con.DISPLAY_DEVICE_PRIMARY_DEVICE):
+                        names.append(dev.DeviceName)
+                except Exception:
+                    break
+        except Exception:
+            pass
+        return names
+
     def capture(self, display_idx: int = 0) -> np.ndarray | None:
         """Alias for capture_frame."""
         return self.capture_frame(display_idx)
@@ -496,10 +533,22 @@ class DxgiScreenCapture:
             if self._dxcam_camera is not None:
                 try:
                     self._dxcam_camera.stop()
+                    self._dxcam_camera.release()
                 except Exception:
                     pass
                 del self._dxcam_camera
                 self._dxcam_camera = None
+
+            # Ensure dxcam factory knows about this adapter and output
+            try:
+                factory = dxcam.__dict__.get('__factory')
+                if factory is None or dev_idx >= len(factory.devices) or out_idx >= len(factory.outputs[dev_idx]):
+                    if hasattr(dxcam, 'Singleton') and hasattr(dxcam, 'DXFactory'):
+                        if dxcam.DXFactory in dxcam.Singleton._instances:
+                            del dxcam.Singleton._instances[dxcam.DXFactory]
+                        dxcam.__dict__['__factory'] = dxcam.DXFactory()
+            except Exception as e:
+                logger.debug(f"Factory refresh notice: {e}")
 
             self._dxcam_camera = dxcam.create(device_idx=dev_idx, output_idx=out_idx, output_color="BGR")
             if self._dxcam_camera and not getattr(self._dxcam_camera, 'is_capturing', False):
@@ -526,6 +575,29 @@ class DxgiScreenCapture:
                     if exp_w and exp_h and (fw != exp_w or fh != exp_h):
                         logger.warning(f"DXCAM captured resolution ({fw}x{fh}) does not match expected ({exp_w}x{exp_h}). Rejecting and falling back.")
                         frame = None
+                        if self._dxcam_camera:
+                            try:
+                                self._dxcam_camera.stop()
+                                self._dxcam_camera.release()
+                            except Exception:
+                                pass
+                            self._dxcam_camera = None
+                            self._dxcam_current_target = None
+
+                    # Sanity check 2: If target is non-primary (secondary display), verify DXCAM output is NOT the primary display device
+                    if frame is not None and not target_disp.get('is_primary', False) and len(displays) > 1:
+                        out_dev = getattr(getattr(self._dxcam_camera, '_output', None), 'devicename', '')
+                        if out_dev and any(p == out_dev for p in self._get_primary_device_names()):
+                            logger.warning(f"DXCAM output device ({out_dev}) is primary display! Rejecting to prevent duplication.")
+                            frame = None
+                            if self._dxcam_camera:
+                                try:
+                                    self._dxcam_camera.stop()
+                                    self._dxcam_camera.release()
+                                except Exception:
+                                    pass
+                                self._dxcam_camera = None
+                                self._dxcam_current_target = None
             if frame is not None:
                 if frame.shape[2] == 4:
                     return np.ascontiguousarray(frame[:, :, :3])
@@ -537,6 +609,11 @@ class DxgiScreenCapture:
         monitor = None
         if display_idx < len(displays):
             d = displays[display_idx]
+            # Safety check: if there are multiple displays and we are streaming secondary monitor,
+            # never capture at (0, 0) with primary monitor dimensions!
+            if len(displays) > 1 and d.get('is_primary', False) and display_idx != 0:
+                logger.warning("Rejecting primary monitor coordinates for secondary stream.")
+                return None
             monitor = {
                 'left': int(d.get('left', 0)),
                 'top': int(d.get('top', 0)),

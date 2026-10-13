@@ -310,6 +310,20 @@ def attach_virtual_display(width=1280, height=800, refresh_rate=60):
             target_x = -width
             target_y = primary_height - height
 
+            # Check if display is already attached and configured at this exact mode
+            try:
+                cur_dm = win32api.EnumDisplaySettings(target_dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
+                if (getattr(cur_dm, 'PelsWidth', 0) == width and
+                    getattr(cur_dm, 'PelsHeight', 0) == height and
+                    getattr(cur_dm, 'Position_x', 0) == target_x and
+                    getattr(cur_dm, 'Position_y', 0) == target_y and
+                    getattr(cur_dm, 'DisplayFrequency', 0) == refresh_rate and
+                    (target_dev.StateFlags & win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)):
+                    logger.debug(f"[OpenDisplay] Virtual display ({target_dev.DeviceName}) is already configured @ {width}x{height} {refresh_rate}Hz, maintaining active session.")
+                    return
+            except Exception:
+                pass
+
             try:
                 dm = win32api.EnumDisplaySettings(target_dev.DeviceName, win32con.ENUM_CURRENT_SETTINGS)
             except Exception:
@@ -833,6 +847,13 @@ class OpenDisplayServer:
         """Finds the virtual display index among available monitors to guarantee extending rather than mirroring."""
         try:
             displays = self.capture.list_displays(force_refresh=force_refresh)
+            if len(displays) <= 1 and force_refresh:
+                for _ in range(5):
+                    time.sleep(0.3)
+                    displays = self.capture.list_displays(force_refresh=True)
+                    if len(displays) > 1:
+                        break
+
             if len(displays) > 1:
                 for i, d in enumerate(displays):
                     # Priority 1: non-primary display or display with offset position
@@ -844,19 +865,13 @@ class OpenDisplayServer:
                 return 1
         except Exception:
             pass
-        return 0
+        return 1 if len(displays) > 1 else 0
 
     def start(self):
-        # Auto-enable and extend virtual display if tablet or devices attached
-        if self.adb and os.path.exists(self.adb):
-            try:
-                res = self.run_adb(["devices"], timeout=2.0)
-                if "\tdevice" in res.stdout or " device" in res.stdout:
-                    enable_virtual_display()
-                    force_display_topology_extend()
-                    time.sleep(0.5)
-            except Exception:
-                pass
+        # Auto-enable and extend virtual display
+        enable_virtual_display()
+        force_display_topology_extend()
+        time.sleep(0.5)
 
         # Dynamically auto-resolve display index to the extended virtual monitor if available
         self.display_idx = self._resolve_target_display_idx(force_refresh=True)

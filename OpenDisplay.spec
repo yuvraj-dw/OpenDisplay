@@ -14,7 +14,6 @@ a = Analysis(
     ],
     datas=[
         ('app_icon.ico', '.'),
-        ('app_icon.png', '.'),
         ('server/driver/aoap_bin/opendisplay_aoap.inf', 'driver'),
         ('server/driver/vdd_bin/VirtualDisplayDriver/MttVDD.inf', 'driver'),
         ('server/driver/vdd_bin/VirtualDisplayDriver/Virtual_Display_Driver.cer', 'driver'),

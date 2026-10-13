@@ -1,10 +1,13 @@
 package com.display.usbclient;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
 import android.os.Build;
@@ -47,6 +50,15 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
         statusText = findViewById(R.id.status_text);
         statusSpinner = findViewById(R.id.status_spinner);
         deviceInfoText = findViewById(R.id.device_info_text);
+
+        try {
+            Bitmap icon = BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                setTaskDescription(new ActivityManager.TaskDescription("OpenDisplay", R.mipmap.ic_launcher, getColor(R.color.bg_dark)));
+            } else {
+                setTaskDescription(new ActivityManager.TaskDescription("OpenDisplay", icon, getResources().getColor(R.color.bg_dark)));
+            }
+        } catch (Exception ignored) {}
 
         updateDeviceInfo();
 
@@ -257,7 +269,6 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                 if (statusSpinner != null) {
                     statusSpinner.setVisibility(View.GONE);
                 }
-                // Hide idle dashboard overlay to reveal streaming SurfaceView
                 if (idleLayout != null) {
                     idleLayout.setVisibility(View.GONE);
                 }
@@ -300,6 +311,17 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
 
     @Override
     public void onVideoFrame(byte[] payload) {
+        if (!isStreamingActive) {
+            isStreamingActive = true;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (idleLayout != null) {
+                        idleLayout.setVisibility(View.GONE);
+                    }
+                }
+            });
+        }
         if (decoder != null && (streamReceiver == null || streamReceiver.getDecoder() == null)) {
             decoder.decodeFrame(payload, 0, payload.length, 0);
         }
@@ -307,6 +329,26 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
 
     @Override
     public void onImageFrame(byte[] payload) {
+        if (!isStreamingActive) {
+            isStreamingActive = true;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (idleLayout != null) {
+                        idleLayout.setVisibility(View.GONE);
+                    }
+                }
+            });
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        isStreamingActive = false;
+        if (idleLayout != null) {
+            idleLayout.setVisibility(View.VISIBLE);
+        }
     }
 
     @Override
@@ -344,11 +386,7 @@ public class MainActivity extends Activity implements StreamReceiver.StreamListe
                         Log.e(TAG, "Failed reconnecting pipeline: " + e.getMessage(), e);
                     }
                 }
-            } else if (streamReceiver == null || !streamReceiver.isAlive()) {
-                initReceiver();
             }
-        } else if (streamReceiver == null || !streamReceiver.isAlive()) {
-            initReceiver();
         }
     }
 
