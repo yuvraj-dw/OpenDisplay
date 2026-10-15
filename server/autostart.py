@@ -15,6 +15,12 @@ def get_executable_command() -> str:
         return f'"{exe_path}"'
     else:
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        root_exe = os.path.join(root_dir, "OpenDisplay.exe")
+        if os.path.exists(root_exe):
+            return f'"{root_exe}"'
+        dist_single = os.path.join(root_dir, "dist", "OpenDisplay.exe")
+        if os.path.exists(dist_single):
+            return f'"{dist_single}"'
         dist_exe = os.path.join(root_dir, "dist", "OpenDisplay", "OpenDisplay.exe")
         if os.path.exists(dist_exe):
             return f'"{dist_exe}"'
