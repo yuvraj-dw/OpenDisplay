@@ -78,7 +78,6 @@ Right-click the OpenDisplay icon in the Windows notification area to:
 │   ├── transport/        # Native WinUSB AOAP transport & ADB bridge
 │   ├── driver/           # Virtual Display Driver and WinUSB AOAP INF drivers
 │   └── autostart.py      # Windows Registry autostart manager
-├── tests/                # Automated unit and integration test suite (104 tests)
 ├── opendisplay_server.py # Core server orchestration & Win32 system tray
 ├── OpenDisplay.exe       # Standalone 1-file Windows executable (self-installing)
 ├── OpenDisplay.apk       # Standalone Android client APK
@@ -87,12 +86,7 @@ Right-click the OpenDisplay icon in the Windows notification area to:
 
 ---
 
-## Development & Testing
-
-Run the full automated test suite:
-```powershell
-python -m unittest discover -s tests
-```
+## Development & Build
 
 Build standalone Windows binary:
 ```powershell
